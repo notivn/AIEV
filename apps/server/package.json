@@ -18,7 +18,7 @@
     "express": "^5.2.1",
     "gray-matter": "^4.0.3",
     "linkedom": "^0.18.13",
-    "multer": "^2.0.1",
+    "multer": "^2.3.0",
     "nanoid": "^5.1.0"
   },
   "devDependencies": {
