@@ -20,14 +20,14 @@ echo ""
 echo "  AI Edit Video by: noti.vn"
 echo "  =========================="
 
-# 1. Kiểm tra Node.js >= 20
+# 1. Kiểm tra Node.js >= 22
 if ! command -v node >/dev/null 2>&1; then
-  err "Chưa cài Node.js. Tải tại https://nodejs.org (bản 20 trở lên) rồi chạy lại."
+  err "Chưa cài Node.js. Tải tại https://nodejs.org (bản 22 trở lên) rồi chạy lại."
   exit 1
 fi
 NODE_MAJOR="$(node --version | sed 's/^v//' | cut -d. -f1)"
-if [ "$NODE_MAJOR" -lt 20 ]; then
-  err "Node.js $(node --version) quá cũ - cần bản 20 trở lên."
+if [ "$NODE_MAJOR" -lt 22 ]; then
+  err "Node.js $(node --version) quá cũ - cần bản 22 trở lên."
   exit 1
 fi
 ok "Node.js $(node --version)"

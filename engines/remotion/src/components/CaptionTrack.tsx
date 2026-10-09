@@ -7,6 +7,7 @@ import {
   useVideoConfig,
 } from "remotion";
 import type { CaptionCue, CaptionWord } from "../manifest";
+import { fadeInOut } from "./fade";
 import {
   useVietnameseFont,
   VIETNAMESE_FONT_FAMILY,
@@ -94,12 +95,7 @@ const Cue: React.FC<{ cue: CaptionCue }> = ({ cue }) => {
   const bottomBase = vertical ? 320 : 130;
 
   // Vào 4 frame / ra 4 frame để không "bật tắt" cứng giữa hai cụm.
-  const opacity = interpolate(
-    frame,
-    [0, 4, Math.max(5, last - 4), last],
-    [0, 1, 1, 0],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
-  );
+  const opacity = fadeInOut(frame, last, 4, 4);
   const y = interpolate(frame, [0, 5], [18, 0], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",

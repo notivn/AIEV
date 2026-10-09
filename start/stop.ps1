@@ -17,7 +17,7 @@ foreach ($port in 6868, 6869) {
 
 # Xóa dấu vết "đang chạy": để lại thì lần bấm start.bat sau nhìn thấy run.json
 # còn đó và tưởng hệ thống vẫn sống.
-Remove-Item (Join-Path (Split-Path -Parent $PSScriptRoot) ".aievun.json") -ErrorAction SilentlyContinue
+Remove-Item (Join-Path (Split-Path -Parent $PSScriptRoot) ".aiev\run.json") -ErrorAction SilentlyContinue
 
 if ($killed -gt 0) {
     Write-Host "  [OK] Đã dừng hệ thống AI Edit Video ($killed process)." -ForegroundColor Green

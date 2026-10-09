@@ -260,7 +260,10 @@ export const resolveSceneDurationInFrames = (scene: Scene, fps: number): number 
     return scene.durationInFrames;
   }
   if (scene.srcVideo && scene.from != null && scene.to != null) {
-    return Math.max(1, Math.round((scene.to - scene.from) * fps));
+    // Làm tròn TỪNG ĐẦU như SceneClip (startFrom/endAt), không làm tròn hiệu:
+    // from=1.02, to=3.98 @30fps thì round(2.96*30)=89 nhưng video chỉ phát
+    // 119-31=88 frame - thừa 1 frame nền đen ở mỗi điểm cắt.
+    return Math.max(1, Math.round(scene.to * fps) - Math.round(scene.from * fps));
   }
   throw new Error(
     `Scene "${scene.id}" thiếu durationInFrames (scene srcVideo có thể thay bằng from/to).`

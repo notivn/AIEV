@@ -5,6 +5,9 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# doctor.mjs tải cloudflared về .runtime/bin khi máy Mac không có brew (start/bin
+# là chỗ cũ) - chỉ tìm trên PATH là báo "chưa cài" ngay sau khi vừa cài xong
+export PATH="$ROOT/.runtime/bin:$ROOT/start/bin:$PATH"
 
 # 1. Kiểm tra đã cài cloudflared chưa
 if ! command -v cloudflared >/dev/null 2>&1; then

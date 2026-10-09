@@ -73,10 +73,16 @@ if ! git merge --ff-only "$TARGET"; then
   # Máy chỉ-dùng hay dính thay đổi cục bộ (đổi eol, sửa nhầm file…) - stash rồi pull lại
   # `git stash -u` gom cả file untracked (skill tự tạo) nên backup ở trên là bắt buộc.
   printf '  \033[33m-> Pull thất bại - đã backup dữ liệu vào %s rồi stash thay đổi cục bộ...\033[0m\n' "$BK"
+  STASH_BEFORE="$(git rev-parse -q --verify refs/stash || true)"
   git stash push -u -m "aiev-auto-stash" || true
+  STASH_AFTER="$(git rev-parse -q --verify refs/stash || true)"
   if ! git merge --ff-only "$TARGET"; then
+    # stash -u đã RÚT file untracked (skill tự tạo…) khỏi thư mục làm việc - không
+    # trả lại thì "hệ thống cũ vẫn chạy bình thường" là sai. Chỉ pop khi đúng là
+    # vừa có stash mới, kẻo pop nhầm một stash cũ của người dùng.
+    if [ "$STASH_AFTER" != "$STASH_BEFORE" ]; then git stash pop || true; fi
     printf '  \033[31m[LOI] Vẫn không pull được - xem chi tiết trong start/update.log. Hệ thống cũ vẫn chạy bình thường.\033[0m\n'
-    printf '  \033[33m       Chạy "git status" xem file nào đổi, "git stash list" xem bản stash.\033[0m\n'
+    printf '  \033[33m       Chạy "git status" xem file nào đổi.\033[0m\n'
     printf '  \033[33m       Dữ liệu của bạn vẫn nằm nguyên trong %s.\033[0m\n' "$BK"
     exit 1
   fi

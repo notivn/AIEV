@@ -91,7 +91,7 @@ Extract frames **right at the edges of the zoom move** (start, peak, end) - e.g.
 ---
 
 ## 🔊 SOUND EFFECT (synced with the zoom & the content)
-Shared library: `assets/sound-effects/` (from inside a project: `../../assets/sound-effects/`). The recommended set = the entries tagged `hay-dung` in `assets/sound-effects/library.json`. The exact `<audio id="sfx-*">` wiring is in "Wiring it in" below.
+Shared library: `assets/sound-effects/` (from inside a project: `../../assets/sound-effects/`). The recommended set = the entries tagged `hay-dung` in `assets/sound-effects/library.json`. Skip any entry whose file is not on disk - library.json still lists a few files that are not shipped with the repo. The exact `<audio id="sfx-*">` wiring is in "Wiring it in" below.
 
 ### Picking SFX yourself (by content + timestamp + zoom)
 1. Read the transcript + caption timestamps + storyboard → find the "accent points" that need sound: numbers/count-ups, keyword reveals, **punch-in zoom beats**, hard scene changes, punchlines, the closing CTA.

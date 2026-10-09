@@ -133,7 +133,7 @@ Standard layout: the background (`ambient-bg`) is one sub-comp **running continu
 
 ## SOUND EFFECT (SFX) - pick them yourself & wire them to timestamps
 Add SFX to punctuate the video (figures, reveals, scene changes, punchlines). Take them from the **pre-curated** library:
-`assets/sound-effects/` - from inside a project: `../../assets/sound-effects/`. The recommended set = the entries tagged `hay-dung` in `assets/sound-effects/library.json`.
+`assets/sound-effects/` - from inside a project: `../../assets/sound-effects/`. The recommended set = the entries tagged `hay-dung` in `assets/sound-effects/library.json`. Skip any entry whose file is not on disk - library.json still lists a few files that are not shipped with the repo.
 The exact `<audio id="sfx-*">` wiring is in "Wiring technique (HyperFrames)" below.
 
 ### Picking SFX yourself (by content + timestamp)

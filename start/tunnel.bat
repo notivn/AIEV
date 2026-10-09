@@ -2,6 +2,8 @@
 title Cloudflare Tunnel - AI Edit Video
 setlocal EnableExtensions
 cd /d "%~dp0.."
+rem cloudflared doctor tai rieng nam o .runtime\bin (start\bin la cho cu)
+set "PATH=%CD%\.runtime\bin;%CD%\start\bin;%PATH%"
 
 rem 1. Kiem tra da cai cloudflared chua
 where cloudflared >nul 2>nul

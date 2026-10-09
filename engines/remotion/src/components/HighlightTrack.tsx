@@ -7,6 +7,7 @@ import {
   useVideoConfig,
 } from "remotion";
 import type { HighlightCue } from "../manifest";
+import { fadeInOut } from "./fade";
 import { useVietnameseFont, VIETNAMESE_FONT_FAMILY, vietnameseFontFaceCss } from "./vietnameseFont";
 
 /**
@@ -60,22 +61,21 @@ const Cue: React.FC<{ cue: HighlightCue; raised: boolean }> = ({
   const bottomBase = raised ? (vertical ? 700 : 470) : (vertical ? 330 : 240);
 
   // Vào 5 frame / ra 6 frame — bật tắt cứng trông rẻ trên footage thật.
-  const opacity = interpolate(
-    frame,
-    [0, 5, Math.max(6, last - 6), last],
-    [0, 1, 1, 0],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
-  );
+  const opacity = fadeInOut(frame, last, 5, 6);
   // Pop nhẹ khi vào (scale-pop 0.94 → 1.02 → 1) + trôi lên rất chậm suốt cue:
   // giữ cảm giác "sống" mà không giành sự chú ý với lời nói.
   const pop = interpolate(frame, [0, 5, 9], [0.94, 1.02, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
-  const drift = interpolate(frame, [0, last], [0, -DRIFT_MAX], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
+  // last = 0 (cue 1 frame) thì [0, 0] không tăng dần - interpolate ném lỗi
+  const drift =
+    last > 0
+      ? interpolate(frame, [0, last], [0, -DRIFT_MAX], {
+          extrapolateLeft: "clamp",
+          extrapolateRight: "clamp",
+        })
+      : 0;
   // Thanh accent quét ra theo chiều ngang — nhịp "gạch chân" cho key chính.
   const barScale = interpolate(frame, [2, 12], [0, 1], {
     extrapolateLeft: "clamp",

@@ -195,7 +195,7 @@ Landscape is wide → prefer horizontal layouts (unlike TikTok's vertical stack)
 ---
 
 ## 🔊 SOUND EFFECT (MANDATORY - from noti-tiktok-full-text)
-Every video gets SFX punctuating the beats (figures, reveals, scene changes/camera moves, punchlines, CTA). Shared library: `assets/sound-effects/` (from inside a project: `../../assets/sound-effects/`). The recommended set = the entries tagged `hay-dung` in `assets/sound-effects/library.json`.
+Every video gets SFX punctuating the beats (figures, reveals, scene changes/camera moves, punchlines, CTA). Shared library: `assets/sound-effects/` (from inside a project: `../../assets/sound-effects/`). The recommended set = the entries tagged `hay-dung` in `assets/sound-effects/library.json`. Skip any entry whose file is not on disk - library.json still lists a few files that are not shipped with the repo.
 
 ### Picking SFX yourself (by content + timestamp)
 1. Read the transcript + caption timestamps + storyboard → find the "accent points" that need sound: figures/count-ups, keyword reveals, **the FULL→PIP camera move beat**, a slide/chart scene opening, the highlight on a payoff line, hard scene changes, the "Đăng ký kênh" (Subscribe) outro CTA, punchlines.

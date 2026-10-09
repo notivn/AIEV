@@ -480,7 +480,8 @@ export function buildEditPrompt(input: {
   } else if (brief.sfxMode === "library") {
     lines.push(
       "Đọc `assets/sound-effects/library.json` để tự tìm sound effect phù hợp theo tags/description " +
-        "của từng entry (file nằm trong `assets/sound-effects/`).",
+        "của từng entry (file nằm trong `assets/sound-effects/`). library.json còn liệt kê vài " +
+        "file KHÔNG đi kèm repo (bản quyền) - entry nào không có file thật trên đĩa thì bỏ qua.",
     );
   } else {
     lines.push("KHÔNG dùng sound effect trong video này.");
