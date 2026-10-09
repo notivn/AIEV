@@ -166,7 +166,7 @@ router.patch("/:file", (req, res) => {
     if (typeof body.description !== "string") {
       throw new HttpError(400, "INVALID_DESCRIPTION", "description phải là string");
     }
-    entry.description = body.description;
+    entry.description = body.description.trim().slice(0, 2000);
   }
 
   if ("tags" in body) {

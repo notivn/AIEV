@@ -225,13 +225,16 @@ router.post("/", uploadProgress, upload.single("file"), (req, res) => {
     // bắt quét thêm mã QR (token chính vốn mở được cả agent lẫn xóa project).
     if (!isLocalRequest(req) && !hasMasterToken(req)) {
       const token = qs(body.token) || qs(req.query.k);
-      // Token gắn với đúng project khi scope=project; scope khác chỉ cần token
-      // của một phiên còn hiệu lực (phiên nào cũng do người dùng vừa mở QR).
-      const ok =
-        scope === "project"
-          ? isValidUploadToken(token, projectId ?? "")
-          : isKnownUploadToken(token);
-      if (!ok) {
+      // imports/ là thư mục dùng chung — không cho QR token remote ghi vào;
+      // upload từ điện thoại chỉ được dùng scope=project (gắn đúng project).
+      if (scope !== "project") {
+        throw new HttpError(
+          403,
+          "UPLOAD_TOKEN_INVALID",
+          "Upload vào thư mục dùng chung chỉ được từ máy tính."
+        );
+      }
+      if (!isValidUploadToken(token, projectId ?? "")) {
         throw new HttpError(
           403,
           "UPLOAD_TOKEN_INVALID",
