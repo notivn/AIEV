@@ -46,7 +46,7 @@ import {
   type LibraryItem as ApiLibraryItem,
 } from "@/lib/api";
 import { useT } from "@/lib/i18n";
-import { projectRelPath, writeDragData, type LibraryItem } from "./library";
+import { dropTracksOf, projectRelPath, writeDragData, type LibraryItem } from "./library";
 
 type Tab = "project" | "sfx" | "music";
 
@@ -384,7 +384,7 @@ export function LibraryPanel({
               )}
               <IconButton
                 label={
-                  row.item.source === "music" ? t("editor.library.add-music") : t("editor.library.add")
+                  dropTracksOf(row.item)[0] === "music" ? t("editor.library.add-music") : t("editor.library.add")
                 }
                 size="sm"
                 disabled={readOnly || busyKey !== null}
@@ -426,6 +426,9 @@ export function LibraryPanel({
         onChange={(next) => {
           setTab(next);
           setTag(null);
+          // Từ khóa của tab này (tên file video) gần như không bao giờ khớp tab
+          // kia (tên sfx) - giữ lại là tab mới trống trơn không rõ vì sao
+          setQuery("");
         }}
         options={[
           { value: "project", label: t("editor.library.tab-project") },
@@ -457,7 +460,7 @@ export function LibraryPanel({
       <div ref={listRef} className="editor-library-list">
         {body}
       </div>
-      <p className="shrink-0 text-meta text-[var(--text-muted)]">
+      <p className="min-w-0 shrink-0 text-meta text-[var(--text-muted)] [overflow-wrap:anywhere]">
         {readOnly ? t("editor.library.readonly") : t("editor.library.hint")}
       </p>
     </aside>

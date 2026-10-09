@@ -1,14 +1,18 @@
 "use client";
 
 /**
- * Ô nhập của inspector - bọc <Field> (nhãn + gợi ý + lỗi đúng chỗ) quanh ô số
- * và ô chữ biết "sửa sống": mỗi lần gõ ra một giá trị HỢP LỆ là ghi ngay vào
- * timeline (trình phát thấy liền), giá trị sai thì báo lỗi dưới ô và KHÔNG ghi.
- * Rời ô thì chữ quay về giá trị thật đang lưu, và lượt gõ khép lại thành một
- * bước hoàn tác (store gộp các lần gõ cùng ô).
+ * Ô nhập của inspector - bọc <Field> (nhãn + gợi ý + lỗi đúng chỗ).
+ *
+ * - Ô CHỮ "sửa sống": mỗi lần gõ ra một chuỗi hợp lệ là ghi ngay (trình phát
+ *   thấy liền) - mọi tiền tố của một câu đều là một câu hợp lệ.
+ * - Ô SỐ chỉ ghi khi CHỐT (Enter / rời ô / ↑↓): gõ "99" vào "Điểm ra" thì "9"
+ *   là một tiền tố hợp lệ - ghi sống là đã lưu `to=9` trước khi "99" bị từ
+ *   chối. Lúc gõ vẫn báo lỗi ngay dưới ô; chốt một giá trị sai thì không ghi.
+ * - Esc: trả ô về giá trị đang lưu và rời ô.
+ * Lượt sửa khép lại thành một bước hoàn tác (store gộp các lần gõ cùng ô).
  */
 
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { Field } from "@/components/Field";
 import { useT } from "@/lib/i18n";
 import { useEditor } from "./EditorContext";
@@ -62,6 +66,8 @@ export function NumberField({
   const [text, setText] = useState(() => fmtNumber(value, digits));
   const [focused, setFocused] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Esc vừa bấm: lần blur ngay sau đó KHÔNG ghi */
+  const revertRef = useRef(false);
 
   // Giá trị đổi từ nơi khác (kéo trên timeline, hoàn tác) - chỉ đồng bộ khi
   // người dùng KHÔNG đang gõ ở ô này, không thì chữ nhảy dưới tay họ. Đồng bộ
@@ -98,19 +104,30 @@ export function NumberField({
           onFocus={() => setFocused(true)}
           onChange={(e) => {
             setText(e.target.value);
-            const n = parseNumber(e.target.value);
-            const problem = check(n);
-            setError(problem);
-            if (!problem && n !== null) onCommit(n);
+            // Chỉ kiểm, KHÔNG ghi - ghi lúc chốt (xem đầu file)
+            setError(check(parseNumber(e.target.value)));
           }}
           onBlur={() => {
+            const revert = revertRef.current;
+            revertRef.current = false;
+            const n = parseNumber(text);
+            if (!revert && n !== null && !check(n) && fmtNumber(n, digits) !== fmtNumber(value, digits)) {
+              onCommit(n);
+            }
             setFocused(false);
             setError(null);
+            // Ghi xong thì `value` mới về ở lượt render sau và đồng bộ lại chữ
             setText(fmtNumber(value, digits));
             endCoalesce();
           }}
           onKeyDown={(e) => {
             if (e.key === "Enter") e.currentTarget.blur();
+            if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              revertRef.current = true;
+              e.currentTarget.blur();
+            }
             if (e.key === "ArrowUp" || e.key === "ArrowDown") {
               e.preventDefault();
               const base = parseNumber(text) ?? value;
@@ -186,6 +203,13 @@ export function TextField({
       setError(null);
       setText(value);
       endCoalesce();
+    },
+    // Esc rời ô (chữ đã ghi sống thì giữ; hoàn tác bằng Ctrl+Z như mọi thao tác)
+    onKeyDown: (e: ReactKeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.currentTarget.blur();
     },
   };
 

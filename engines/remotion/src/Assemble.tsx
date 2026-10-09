@@ -11,7 +11,7 @@ import { SceneClip } from "./components/SceneClip";
 import { SfxTrack } from "./components/SfxTrack";
 import { SubtitleTrack } from "./components/SubtitleTrack";
 import { Transition } from "./components/Transition";
-import { useMediaSrc } from "./media";
+import { useMediaErrorProps, useMediaSrc } from "./media";
 
 /**
  * Composition "Assemble" duy nhất — data-driven hoàn toàn từ manifest
@@ -26,6 +26,7 @@ export const Assemble: React.FC<Manifest> = (manifest) => {
   const { scenes, audio, fps, captions, overlays, watermark, subtitles, subtitleStyle } =
     manifest;
   const mediaSrc = useMediaSrc();
+  const errorProps = useMediaErrorProps();
 
   let from = 0;
   const sequences = scenes.map((scene, index) => {
@@ -78,7 +79,7 @@ export const Assemble: React.FC<Manifest> = (manifest) => {
       {captions.length > 0 ? <CaptionTrack captions={captions} /> : null}
 
       {/* Voice: xương sống sync — một track chạy suốt từ frame 0 */}
-      {audio.voice ? <Audio src={mediaSrc(audio.voice)} /> : null}
+      {audio.voice ? <Audio src={mediaSrc(audio.voice)} {...errorProps(audio.voice)} /> : null}
 
       {/* Sound effects theo atFrame */}
       <SfxTrack sfx={audio.sfx} />

@@ -32,8 +32,11 @@ export const TARGET_MIME: Record<DropTrack, string> = {
 export function dropTracksOf(item: LibraryItem): DropTrack[] {
   switch (item.source) {
     case "project":
-      // Audio của project: mặc định là hiệu ứng âm, thả lên làn Nhạc nền thì thành nhạc
-      return item.kind === "audio" ? ["sfx", "music"] : ["scene"];
+      // Audio của project: file trong assets/music/ mặc định là NHẠC NỀN (nút "+"
+      // đi qua hỏi-thay-nhạc như nhạc thư viện), còn lại là hiệu ứng âm. Thả
+      // tay lên làn kia vẫn được.
+      if (item.kind !== "audio") return ["scene"];
+      return /^assets\/music\//i.test(item.relPath.replace(/\\/g, "/")) ? ["music", "sfx"] : ["sfx", "music"];
     case "sfx":
       return ["sfx"];
     case "music":

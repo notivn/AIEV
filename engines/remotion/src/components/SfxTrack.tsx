@@ -1,7 +1,7 @@
 import React from "react";
 import { Audio, Sequence, useVideoConfig } from "remotion";
 import type { Sfx } from "../manifest";
-import { useMediaSrc } from "../media";
+import { useMediaErrorProps, useMediaSrc } from "../media";
 
 /** Volume sfx mặc định — thấp hơn voice ~10dB (skill remotion-assemble). */
 const DEFAULT_SFX_VOLUME = 0.3;
@@ -14,6 +14,7 @@ const DEFAULT_SFX_VOLUME = 0.3;
 export const SfxTrack: React.FC<{ sfx: Sfx[] }> = ({ sfx }) => {
   const { fps } = useVideoConfig();
   const mediaSrc = useMediaSrc();
+  const errorProps = useMediaErrorProps();
 
   return (
     <>
@@ -27,6 +28,7 @@ export const SfxTrack: React.FC<{ sfx: Sfx[] }> = ({ sfx }) => {
             // Bỏ khoảng lặng dẫn của file sfx → tiếng thật rơi đúng atFrame
             startFrom={Math.round((entry.mediaStart ?? 0) * fps)}
             volume={entry.volume ?? DEFAULT_SFX_VOLUME}
+            {...errorProps(entry.file)}
           />
         </Sequence>
       ))}

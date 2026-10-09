@@ -542,6 +542,11 @@ router.post("/:id/editor/chat", (req, res) => {
       effort ?? null,
       null,
     );
+    // Phiên chat của editor: TẮT tự chạy tiếp (cột mặc định là 1). Người dùng
+    // đang ngồi trước trình chỉnh sửa và hỏi từng việc - lượt hỏng mà tự chạy
+    // lại sau 10s là AI sửa meta.json lúc họ không ngờ tới (khóa editor, xung đột).
+    // Họ vẫn bật lại được ở khung chat như mọi phiên khác.
+    db.setChatAutoResume(sessionId, false);
   }
   // Khối ngữ cảnh đầy đủ cho MỌI phiên chưa từng nhận nó - không chỉ phiên mới
   // tạo: phiên /api/chat cũ của project (goal null) tiếp tục từ editor cũng chưa

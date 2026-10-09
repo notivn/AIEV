@@ -44,6 +44,7 @@ import { fmtNumber, NumberField, ReadOnlyRow, TextField, VolumeField } from "./f
 import {
   footageWindow,
   insertCaptionWord,
+  isMediaMissing,
   isWellFormed,
   insertHighlightPart,
   patchCaptionWord,
@@ -59,6 +60,7 @@ import {
   sceneIndexById,
   sceneKind,
   sceneMaxFrames,
+  sceneMissingMedia,
   sceneSourcePath,
   setCueDuration,
   setCueStart,
@@ -118,7 +120,7 @@ export function Inspector({
   preview: TimelinePreview;
   actions: InspectorActions;
 }) {
-  const { t } = useT();
+  const { t, tf } = useT();
   const { selection, readOnly } = useEditor();
 
   let body: ReactNode;
@@ -212,13 +214,47 @@ export function Inspector({
     }
   }
 
+  // File nguồn không còn trên đĩa (xóa/đổi tên ngoài editor): trình phát chỉ
+  // hiện khung trống, nói rõ ở đây cái gì thiếu
+  let missingFile: string | null = null;
+  if (selection?.kind === "scene") {
+    const scene = timeline.scenes[sceneIndexById(timeline, selection.id)];
+    missingFile = scene ? sceneMissingMedia(scene, preview) : null;
+  } else if (selection?.kind === "sfx") {
+    const file = timeline.audio.sfx[selection.index]?.file;
+    missingFile = isMediaMissing(preview, file) ? String(file) : null;
+  } else if (selection?.kind === "music") {
+    const file = timeline.audio.music?.file;
+    missingFile = isMediaMissing(preview, file) ? String(file) : null;
+  } else if (selection?.kind === "voice") {
+    const file = timeline.audio.voice;
+    missingFile = isMediaMissing(preview, file) ? String(file) : null;
+  }
+
   return (
-    <section className="card editor-inspector flex flex-col gap-3" aria-label={title}>
+    <section
+      className="card editor-inspector flex flex-col gap-3"
+      aria-label={title}
+      onKeyDown={(e) => {
+        // Esc trong bất kỳ ô nhập nào của inspector: rời ô (phím tắt của trang
+        // không chạy khi đang gõ, nên không có Esc thì không thoát ra được bằng bàn phím)
+        const el = e.target;
+        if (
+          e.key === "Escape" &&
+          el instanceof HTMLElement &&
+          (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT")
+        ) {
+          e.preventDefault();
+          el.blur();
+        }
+      }}
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-semibold">{title}</h2>
         {selection && <SelectionActions actions={actions} selection={selection} />}
       </div>
       <fieldset disabled={readOnly} className="flex min-w-0 flex-col gap-3">
+        {missingFile && <Banner tone="danger" message={tf("editor.media.missing", { file: missingFile })} />}
         {body}
       </fieldset>
     </section>
@@ -602,6 +638,12 @@ function CaptionForm({ index, cue }: { index: number; cue: TimelineCaptionCue })
   const id = `cap-${index}`;
   const key = (field: string) => typing(`captions:${index}:w${safeIndex}:${field}`);
   const cueEnd = cue.from + cue.durationInFrames;
+  // Từ không được chồng lên từ bên cạnh: karaoke tô từng từ theo mốc, hai từ
+  // chồng nhau là hai từ sáng cùng lúc
+  const prevWord = cue.words[safeIndex - 1];
+  const nextWord = cue.words[safeIndex + 1];
+  const startMin = prevWord ? Math.max(cue.from, prevWord.end) : cue.from;
+  const endMax = nextWord ? Math.min(cueEnd, nextWord.start) : cueEnd;
 
   useEffect(() => {
     if (wordIndex !== safeIndex) setWordIndex(safeIndex);
@@ -677,7 +719,7 @@ function CaptionForm({ index, cue }: { index: number; cue: TimelineCaptionCue })
               label={t("editor.caption.word-start")}
               unit="s"
               value={word.start / fps}
-              min={cue.from / fps}
+              min={startMin / fps}
               max={cueEnd / fps}
               validate={(v) =>
                 Math.round(v * fps) > word.end ? t("editor.caption.start-after-end") : null
@@ -692,7 +734,7 @@ function CaptionForm({ index, cue }: { index: number; cue: TimelineCaptionCue })
               unit="s"
               value={word.end / fps}
               min={cue.from / fps}
-              max={cueEnd / fps}
+              max={endMax / fps}
               validate={(v) =>
                 Math.round(v * fps) < word.start ? t("editor.caption.end-before-start") : null
               }

@@ -182,6 +182,7 @@ export function ChatThread({
   providersEnabled = false,
   send,
   emptyText,
+  sendDisabled = false,
 }: {
   sessionId: string | null;
   projectId?: string;
@@ -209,6 +210,11 @@ export function ChatThread({
   ) => Promise<{ sessionId: string }>;
   /** Câu gợi ý lúc chưa có tin nhắn nào - mặc định là câu chung của chat */
   emptyText?: string;
+  /**
+   * Chặn gửi (vd chưa kết nối Claude - gửi đi chỉ để nhận lỗi). Nơi dùng tự hiện
+   * lý do + đường sửa bên cạnh; ô nhập vẫn gõ được để soạn sẵn.
+   */
+  sendDisabled?: boolean;
 }) {
   const { t, tf } = useT();
   const [messages, setMessages] = useState<UiMessage[]>([]);
@@ -478,7 +484,7 @@ export function ChatThread({
 
   async function onSend() {
     const message = input.trim();
-    if (!message || running) return;
+    if (!message || running || sendDisabled) return;
     setInput("");
     setAgentError(null);
     setMessages((m) => [...m, { role: "user", kind: "text", content: message }]);
@@ -763,7 +769,7 @@ export function ChatThread({
             {t("chat.stop")}
           </Button>
         ) : (
-          <Button small={compact} onClick={onSend} disabled={!input.trim()}>
+          <Button small={compact} onClick={onSend} disabled={!input.trim() || sendDisabled}>
             <Send size={14} strokeWidth={2} />
             {t("chat.send")}
           </Button>

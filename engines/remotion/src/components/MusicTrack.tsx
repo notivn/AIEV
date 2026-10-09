@@ -6,7 +6,7 @@ import {
   useVideoConfig,
 } from "remotion";
 import type { Music } from "../manifest";
-import { useMediaSrc } from "../media";
+import { useMediaErrorProps, useMediaSrc } from "../media";
 
 /** Thời gian chuyển mượt quanh mỗi biên speech range (giây). */
 const DUCK_RAMP_SEC = 0.4;
@@ -29,6 +29,7 @@ export const MusicTrack: React.FC<{ music: Music }> = ({ music }) => {
   // vòng thứ hai. MusicTrack nằm ngoài Loop nên useCurrentFrame() luôn tuyệt đối.
   const frame = useCurrentFrame();
   const mediaSrc = useMediaSrc();
+  const errorProps = useMediaErrorProps();
 
   const rampFrames = Math.max(1, DUCK_RAMP_SEC * fps);
   const half = rampFrames / 2;
@@ -67,6 +68,6 @@ export const MusicTrack: React.FC<{ music: Music }> = ({ music }) => {
   };
 
   return (
-    <Audio src={mediaSrc(music.file)} loop volume={() => volumeAt(frame)} />
+    <Audio src={mediaSrc(music.file)} loop volume={() => volumeAt(frame)} {...errorProps(music.file)} />
   );
 };

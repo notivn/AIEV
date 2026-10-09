@@ -1107,10 +1107,26 @@ textarea.input {
    Chiều cao 100dvh - 96px = trừ topbar 56px của shell và padding 20px trên/dưới
    của <main>. */
 .editor-root {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 12px;
   min-width: 0;
+}
+/* Thông báo thoáng qua của editor ("Không tách được ở đây"…) - nổi ngay dưới
+   thanh trên, không chiếm chỗ trong cột (chen vào là đẩy cả trình phát xuống). */
+.editor-notice {
+  position: absolute;
+  top: 44px;
+  left: 50%;
+  z-index: 40;
+  width: max-content;
+  max-width: min(560px, calc(100% - 32px));
+  transform: translateX(-50%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  pointer-events: none;
 }
 .editor-main {
   display: flex;
@@ -1378,6 +1394,12 @@ textarea.input {
   outline: 1px dashed var(--timeline-snap);
   outline-offset: -3px;
 }
+/* Làn không nhận món đang kéo từ thư viện (con trỏ "cấm" do dropEffect none) */
+.tl-row[data-drop="reject"] > .tl-lane {
+  outline: 1px dashed var(--danger);
+  outline-offset: -3px;
+  cursor: not-allowed;
+}
 .tl-empty {
   position: absolute;
   top: 50%;
@@ -1474,6 +1496,12 @@ textarea.input {
 .tl-block.is-invalid {
   border-style: dashed;
   border-color: var(--danger);
+}
+/* Khối hẹp (< 24px): không padding, viền trái mỏng - hộp đúng bằng bề ngang tính
+   ra (≥ 6px), không tự nở ra đè lên khối bên cạnh */
+.tl-block.is-narrow {
+  padding: 0;
+  border-left-width: 1px;
 }
 /* Mép kéo trim/đổi độ dài - vùng bấm 8px, hiện vạch khi rê vào */
 .tl-handle {

@@ -12,11 +12,14 @@
 
 import { MessageSquarePlus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Banner } from "@/components/Banner";
 import { ChatThread } from "@/components/ChatThread";
 import { IconButton } from "@/components/IconButton";
+import { LinkButton } from "@/components/LinkButton";
 import { ShellRightPanel } from "@/components/Shell";
 import {
   getChatSessions,
+  getHealth,
   sendEditorChat,
   type AgentEffort,
   type ChatSession,
@@ -82,6 +85,23 @@ export function EditorChat({
     if (resyncTick > 0) void loadSessions(false);
   }, [resyncTick, loadSessions]);
 
+  // Chưa kết nối Claude (không OAuth, không API key): gửi chỉ để nhận lỗi ở
+  // lượt chạy - chặn nút Gửi và chỉ thẳng tới trang Kết nối
+  const [claudeAuth, setClaudeAuth] = useState<boolean | null>(null);
+  useEffect(() => {
+    let alive = true;
+    getHealth()
+      .then((h) => {
+        if (alive) setClaudeAuth(h.checks?.claudeAuth !== false);
+      })
+      .catch(() => {
+        if (alive) setClaudeAuth(null); // không biết - đừng chặn
+      });
+    return () => {
+      alive = false;
+    };
+  }, [resyncTick]);
+
   const send = useCallback(
     async (message: string, current: string | undefined, opts?: { model?: string; effort?: AgentEffort }) => {
       if (!(await beforeSend())) throw new Error(t("editor.chat.save-first"));
@@ -105,8 +125,20 @@ export function EditorChat({
           <MessageSquarePlus size={16} strokeWidth={1.75} />
         </IconButton>
       </div>
+      {claudeAuth === false && (
+        <Banner
+          tone="info"
+          message={t("editor.chat.no-auth")}
+          actions={
+            <LinkButton href="/connections" small>
+              {t("editor.chat.no-auth-link")}
+            </LinkButton>
+          }
+        />
+      )}
       {ready && (
         <ChatThread
+          sendDisabled={claudeAuth === false}
           compact
           providersEnabled
           sessionId={sessionId}

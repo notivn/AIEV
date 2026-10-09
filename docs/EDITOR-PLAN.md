@@ -167,6 +167,12 @@ thật + so khung hình).
   `useVietnameseFont`: lỗi nạp font khi ĐANG RENDER vẫn `cancelRender`; trong Player
   (`getRemotionEnvironment().isPlayer`) chỉ cảnh báo + `continueRender`, không làm
   sập trang.
+- Lỗi nạp media trong Player: `MediaErrorContext` / `useMediaErrorProps()` ở
+  `media.tsx` - CHỈ PreviewPlayer cấp Provider (gắn `onError` cho
+  OffthreadVideo/Audio/Img → banner trên trình phát thay vì lỗi không bắt
+  được). Render CLI không có Provider → props y hệt trước, file hỏng vẫn hủy
+  render. File thiếu trên đĩa (không có trong `preview.mediaVersions`) được
+  PreviewPlayer gỡ khỏi manifest xem trước (khung trống cùng độ dài).
 - Server phục vụ font: thêm `remotion-fonts` vào whitelist `/media`
   (→ `engines/remotion/public/fonts`).
 - Web: `apps/web/package.json` thêm `remotion` + `@remotion/player` đúng

@@ -57,6 +57,7 @@ import {
   captionWordsOf,
   highlightPartsOf,
   isCueSel,
+  isMediaMissing,
   isWellFormed,
   moveCue,
   moveSfx,
@@ -65,6 +66,7 @@ import {
   sceneIndexById,
   sceneInsertIndexAt,
   sceneKind,
+  sceneMissingMedia,
   sceneSourcePath,
   trimScene,
   type Selection,
@@ -75,7 +77,7 @@ import {
   clampPps,
   contentEndFrame,
   formatRulerLabel,
-  formatTimecode,
+  formatSeconds,
   frameToPx,
   pxToFrame,
   rulerStep,
@@ -85,6 +87,13 @@ import {
 } from "./timing";
 
 const LABEL_W = 136;
+/**
+ * Bề ngang tối thiểu (px) của một khối - để còn bấm/kéo được. Ở mức zoom vừa
+ * khung, cue 1-3 frame hay scene 1 frame chỉ rộng 1-2px: không ai bấm trúng.
+ */
+const BLOCK_MIN_PX = 6;
+/** Scene không tính được độ dài: vẽ hẳn ra cho thấy (trước đây rộng 1 frame = biến mất) */
+const BROKEN_BLOCK_MIN_PX = 24;
 /** Đi được bao xa (px) thì mới coi là kéo - nhỏ hơn là một cú bấm chọn */
 const DRAG_THRESHOLD = 3;
 /** Khoảng hít (px trên màn hình, không phải frame - zoom nào cũng như nhau) */
@@ -171,6 +180,35 @@ function decodeSel(el: Element): Selection | null {
   }
 }
 
+/**
+ * Trong cùng làn với `hit`, khối có [data-start, data-end) chứa `frame` và
+ * NGẮN nhất (bấm vào chỗ cue chồng nhau là chọn đúng cue người dùng nhắm).
+ * null = không khối nào chứa frame đó.
+ */
+function blockSpanContains(el: Element, frame: number): boolean {
+  const start = Number(el.getAttribute("data-start"));
+  const end = Number(el.getAttribute("data-end"));
+  return Number.isFinite(start) && Number.isFinite(end) && frame >= start && frame < Math.max(end, start + 1);
+}
+
+function preciseBlockAt(hit: Element, frame: number): Element | null {
+  const lane = hit.closest("[data-lane]");
+  if (!lane) return null;
+  let best: Element | null = null;
+  let bestSpan = Number.POSITIVE_INFINITY;
+  lane.querySelectorAll("[data-block]").forEach((el) => {
+    const start = Number(el.getAttribute("data-start"));
+    const end = Number(el.getAttribute("data-end"));
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+    if (frame < start || frame >= Math.max(end, start + 1)) return;
+    if (end - start < bestSpan) {
+      best = el;
+      bestSpan = end - start;
+    }
+  });
+  return best;
+}
+
 const selKey = (sel: Selection | null): string =>
   !sel ? "" : sel.kind === "scene" ? `scene:${sel.id}` : "index" in sel ? `${sel.kind}:${sel.index}` : sel.kind;
 
@@ -210,6 +248,8 @@ export function TimelinePanel({
   const [dragView, setDragView] = useState<DragView | null>(null);
   /** Món thư viện đang được kéo ngang timeline - track sẽ nhận + vị trí */
   const [libDrop, setLibDrop] = useState<DropTarget | null>(null);
+  /** Làn đang bị rê qua mà KHÔNG nhận được món đang kéo */
+  const [libReject, setLibReject] = useState<TrackKey | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const rafRef = useRef<number | null>(null);
   const pendingRef = useRef<(() => void) | null>(null);
@@ -406,6 +446,7 @@ export function TimelinePanel({
   /** Thao tác (thuần) ứng với chế độ kéo + độ dời - luôn tính từ `origin` truyền vào. */
   const applyDrag = (drag: DragState, delta: number): ((origin: Timeline) => Timeline) | null => {
     const sel = drag.target;
+    const lastFrame = Math.max(0, totalFrames - 1);
     if (!sel) return null;
     if (sel.kind === "scene") {
       if (drag.mode === "trim-start" || drag.mode === "trim-end") {
@@ -416,11 +457,12 @@ export function TimelinePanel({
     }
     if (isCueSel(sel.kind) && "index" in sel) {
       const kind = CUE_KIND[sel.kind];
-      if (drag.mode === "move") return (origin) => moveCue(origin, kind, sel.index, delta);
+      // Không kéo được ra sau hết video (cue đã ở ngoài từ trước thì để yên)
+      if (drag.mode === "move") return (origin) => moveCue(origin, kind, sel.index, delta, lastFrame);
       if (drag.mode === "trim-start") return (origin) => resizeCue(origin, kind, sel.index, "start", delta);
       if (drag.mode === "trim-end") return (origin) => resizeCue(origin, kind, sel.index, "end", delta);
     }
-    if (sel.kind === "sfx" && drag.mode === "move") return (origin) => moveSfx(origin, sel.index, delta);
+    if (sel.kind === "sfx" && drag.mode === "move") return (origin) => moveSfx(origin, sel.index, delta, lastFrame);
     return null;
   };
 
@@ -429,17 +471,20 @@ export function TimelinePanel({
   // ---------------------------------------------------------------- thả từ thư viện
 
   /**
-   * Đích thả của một món thư viện tại con trỏ. Món chỉ vào được MỘT track (video,
-   * ảnh, sfx thư viện, nhạc) thì thả đâu trên timeline cũng về đúng track đó;
-   * audio của project (sfx hoặc nhạc) thì theo làn dưới con trỏ, mặc định sfx.
+   * Đích thả của một món thư viện tại con trỏ. Con trỏ trên MỘT làn nhận được
+   * món này → làn đó; trên thước giờ / chỗ trống → track mặc định của món.
+   * Con trỏ trên một làn KHÔNG nhận được (thả video vào làn Highlight…) →
+   * "reject": con trỏ "cấm", làn đó viền cảnh báo, thả ra không làm gì - trước
+   * đây món lặng lẽ rơi sang track khác, người dùng không hiểu nó đi đâu.
    */
-  const libraryTargetAt = (e: ReactDragEvent<HTMLDivElement>): DropTarget | null => {
+  const libraryTargetAt = (e: ReactDragEvent<HTMLDivElement>): DropTarget | { reject: TrackKey } | null => {
     if (readOnly) return null;
     const accepted = acceptedTracks([...e.dataTransfer.types]);
     if (accepted.length === 0) return null;
     const row = e.target instanceof Element ? e.target.closest(".tl-row[data-track]") : null;
-    const under = row?.getAttribute("data-track") as DropTrack | null | undefined;
-    const track = under && accepted.includes(under) ? under : accepted[0];
+    const under = row?.getAttribute("data-track") as TrackKey | null | undefined;
+    if (under && !(accepted as string[]).includes(under)) return { reject: under };
+    const track: DropTrack = under ? (under as DropTrack) : accepted[0];
     let frame = Math.round(frameAtClient(e.clientX));
     // Sfx hít vào playhead / mép phần tử khác như khi kéo khối (Alt tắt hít)
     if (track === "sfx") frame += snapDelta(0, [frame], snapCandidates(null, "move", -1), e.altKey).delta;
@@ -450,6 +495,13 @@ export function TimelinePanel({
     const target = libraryTargetAt(e);
     if (!target) return;
     e.preventDefault();
+    if ("reject" in target) {
+      e.dataTransfer.dropEffect = "none";
+      setLibDrop(null);
+      setLibReject(target.reject);
+      return;
+    }
+    setLibReject(null);
     e.dataTransfer.dropEffect = "copy";
     setLibDrop((cur) =>
       cur && cur.track === target.track && cur.frame === target.frame && cur.sceneIndex === target.sceneIndex
@@ -463,12 +515,16 @@ export function TimelinePanel({
     const next = e.relatedTarget;
     if (next instanceof Node && e.currentTarget.contains(next)) return;
     setLibDrop(null);
+    setLibReject(null);
   };
 
   // Lượt kéo bị hủy (Esc, thả ngoài cửa sổ) không phải lúc nào cũng bắn dragleave
   // lên khung timeline - dọn chỉ báo ở dragend của cả trang cho chắc
   useEffect(() => {
-    const clear = () => setLibDrop(null);
+    const clear = () => {
+      setLibDrop(null);
+      setLibReject(null);
+    };
     window.addEventListener("dragend", clear);
     window.addEventListener("drop", clear);
     return () => {
@@ -480,7 +536,8 @@ export function TimelinePanel({
   const onDrop = (e: ReactDragEvent<HTMLDivElement>) => {
     const target = libraryTargetAt(e);
     setLibDrop(null);
-    if (!target) return;
+    setLibReject(null);
+    if (!target || "reject" in target) return;
     e.preventDefault();
     const item = readDragData(e.dataTransfer);
     if (item) onLibraryDrop(item, target);
@@ -491,7 +548,7 @@ export function TimelinePanel({
     const el = scrollRef.current;
     if (!el) return;
     const target = e.target;
-    const blockEl = target.closest("[data-block]");
+    let blockEl = target.closest("[data-block]");
     const edgeEl = target.closest("[data-edge]");
     const onRuler = target.closest("[data-ruler]") !== null;
     const onLane = target.closest("[data-lane]") !== null;
@@ -499,6 +556,17 @@ export function TimelinePanel({
     let mode: DragMode | null = null;
     let sel: Selection | null = null;
     if (blockEl) {
+      // Các khối cùng làn có thể chồng nhau (cue dày đặc ở mức zoom vừa khung,
+      // khối được nới tới BLOCK_MIN_PX): khối nằm trên chưa chắc là khối người
+      // dùng nhắm. Bấm vào THÂN khối (không phải mép kéo) thì chọn khối có
+      // khoảng [start, end) chứa frame dưới con trỏ và ngắn nhất - chính xác
+      // nhất. Không khối nào chứa (con trỏ ở phần được nới) thì giữ khối bị bấm.
+      // (Con trỏ nằm ngoài khoảng frame của chính khối bị bấm = đang ở phần được
+      // nới của một khối hẹp - khối hẹp vẽ trên cùng, đó đúng là khối người dùng nhắm.)
+      if (!edgeEl) {
+        const frame = frameAtClient(e.clientX);
+        if (blockSpanContains(blockEl, frame)) blockEl = preciseBlockAt(blockEl, frame) ?? blockEl;
+      }
       sel = decodeSel(blockEl);
       editor.select(sel);
       // preventDefault bên dưới (chặn bôi đen chữ lúc kéo) cũng chặn luôn việc
@@ -696,6 +764,7 @@ export function TimelinePanel({
     resizable,
     staticBlock = false,
     invalid = false,
+    broken = false,
     offsetPx = 0,
   }: {
     sel: Selection;
@@ -707,11 +776,13 @@ export function TimelinePanel({
     resizable: { start: boolean; end: boolean };
     staticBlock?: boolean;
     invalid?: boolean;
+    /** Scene không tính được độ dài - vẽ rộng hẳn ra để thấy và bấm sửa được */
+    broken?: boolean;
     offsetPx?: number;
   }): ReactNode => {
     const key = selKey(sel);
     const left = x(start);
-    const width = Math.max(2, x(end) - left);
+    const width = Math.max(broken ? BROKEN_BLOCK_MIN_PX : BLOCK_MIN_PX, x(end) - left);
     const selected = key === selectedKey;
     const dragging = key === draggingKey;
     const classes = [
@@ -719,7 +790,10 @@ export function TimelinePanel({
       staticBlock ? "is-static" : "",
       readOnly ? "is-readonly" : "",
       dragging ? "is-dragging" : "",
-      invalid ? "is-invalid" : "",
+      // Khối hẹp: bỏ padding/viền dày - không thì hộp tự nở ra ~20px, đè lên
+      // khối bên cạnh và che mất chính vùng bấm của nó
+      width < 24 ? "is-narrow" : "",
+      invalid || broken ? "is-invalid" : "",
     ].join(" ");
     return (
       <div
@@ -732,6 +806,8 @@ export function TimelinePanel({
         data-block=""
         data-static={staticBlock ? "true" : undefined}
         data-selected={selected ? "true" : undefined}
+        data-start={start}
+        data-end={end}
         {...encodeSel(sel)}
         className={classes}
         style={{
@@ -758,13 +834,19 @@ export function TimelinePanel({
     );
   };
 
-  const secLabel = (frames: number) => formatTimecode(frames, fps);
+  // Giây thập phân như inspector (không phải mm:ss.ff - hai cách viết cho cùng
+  // một mốc thì người dùng phải tự quy đổi)
+  const secLabel = (frames: number) => formatSeconds(frames, fps);
 
-  const sceneBlocks = spans.map((span) => {
+  // Scene HẸP (1 frame, scene lỗi độ dài - khối được nới rộng) vẽ sau cùng để
+  // nằm trên scene kề; scene thường giữ đúng thứ tự phát trong DOM
+  const isNarrowSpan = (sp: SceneSpan) => sp.invalid || x(sp.end) - x(sp.start) < 24;
+  const sceneBlocks = [...spans.filter((sp) => !isNarrowSpan(sp)), ...spans.filter(isNarrowSpan)].map((span) => {
     const scene = timeline.scenes[span.index];
     const kind = sceneKind(scene);
     const icon = kind === "image" ? ImageIcon : kind === "hyperframes" ? Sparkles : Film;
     const name = kind === "hyperframes" ? scene.id : baseName(sceneSourcePath(scene)) || scene.id;
+    const missing = sceneMissingMedia(scene, preview);
     const offset =
       dragView?.mode === "reorder" && dragView.target?.kind === "scene" && dragView.target.id === scene.id
         ? dragView.offsetPx
@@ -774,17 +856,22 @@ export function TimelinePanel({
       start: span.start,
       end: span.end,
       label: name,
-      title: tf("editor.timeline.block-scene", {
-        name,
-        start: secLabel(span.start),
-        end: secLabel(span.end),
-      }),
+      title: span.invalid
+        ? tf("editor.timeline.block-scene-broken", { name })
+        : missing
+          ? tf("editor.timeline.block-missing", { name, file: missing })
+          : tf("editor.timeline.block-scene", {
+              name,
+              start: secLabel(span.start),
+              end: secLabel(span.end),
+            }),
       icon,
       resizable: {
         start: kind === "footage" || kind === "image" || kind === "empty",
         end: true,
       },
-      invalid: span.invalid,
+      invalid: missing !== null,
+      broken: span.invalid,
       offsetPx: offset,
     });
   });
@@ -803,8 +890,18 @@ export function TimelinePanel({
   // Mọi lần đọc dữ liệu cue đều phòng thủ: meta.json do AI ghi có thể sai kiểu
   // (`words` là chuỗi, `text` là số…). Một `.map` trên thứ không phải mảng là
   // sập cả trình chỉnh sửa - ở đây nó chỉ thành một khối đánh dấu lỗi.
+  // Khối NGẮN vẽ SAU (nằm trên): cue dày đặc chồng nhau thì khối nhỏ không bị
+  // khối dài che mất. (z-index không dùng được: khối phải nằm dưới nhãn track
+  // và playhead.) Key giữ nguyên nên React chỉ đổi thứ tự DOM.
+  const byWidthDesc = <T extends { span: number }>(list: T[]): T[] => [...list].sort((a, b) => b.span - a.span);
   const cueBlocks = (kind: "caption" | "subtitle" | "overlay") =>
-    timeline[CUE_KIND[kind]].map((cue, index) => {
+    byWidthDesc(
+      timeline[CUE_KIND[kind]].map((cue, index) => ({
+        cue,
+        index,
+        span: num(cue?.durationInFrames, 1),
+      })),
+    ).map(({ cue, index }) => {
       let label: string;
       if (kind === "caption") {
         const words = captionWordsOf(timeline.captions[index]) ?? [];
@@ -834,7 +931,13 @@ export function TimelinePanel({
       });
     });
 
-  const sfxBlocks = timeline.audio.sfx.map((sfx, index) => {
+  const sfxBlocks = byWidthDesc(
+    timeline.audio.sfx.map((sfx, index) => {
+      const f = str(sfx?.file);
+      const d = f ? preview.media[f]?.durationSec : undefined;
+      return { sfx, index, span: typeof d === "number" ? d : 1 };
+    }),
+  ).map(({ sfx, index }) => {
     const file = str(sfx?.file);
     const media = file ? preview.media[file]?.durationSec : undefined;
     const lenSec =
@@ -843,15 +946,16 @@ export function TimelinePanel({
     const ok = isWellFormed(timeline, sel);
     const name = baseName(file) || t("editor.malformed.short");
     const at = num(sfx?.atFrame, 0);
+    const missing = isMediaMissing(preview, file);
     return block({
       sel,
       start: at,
       end: at + Math.max(1, Math.round(lenSec * fps)),
       label: name,
-      title: `${name} (${secLabel(at)})`,
+      title: missing ? tf("editor.timeline.block-missing", { name, file }) : `${name} (${secLabel(at)})`,
       icon: AudioLines,
       resizable: { start: false, end: false },
-      invalid: !ok,
+      invalid: !ok || missing,
     });
   });
 
@@ -885,10 +989,13 @@ export function TimelinePanel({
               start: 0,
               end: Math.max(1, voiceEnd),
               label: baseName(voice),
-              title: baseName(voice),
+              title: isMediaMissing(preview, voice)
+                ? tf("editor.timeline.block-missing", { name: baseName(voice), file: voice })
+                : baseName(voice),
               icon: Mic,
               resizable: { start: false, end: false },
               staticBlock: true,
+              invalid: isMediaMissing(preview, voice),
             }),
           ]
         : [],
@@ -904,10 +1011,13 @@ export function TimelinePanel({
               start: 0,
               end: totalFrames,
               label: baseName(music.file),
-              title: baseName(music.file),
+              title: isMediaMissing(preview, music.file)
+                ? tf("editor.timeline.block-missing", { name: baseName(music.file), file: String(music.file) })
+                : baseName(music.file),
               icon: Music,
               resizable: { start: false, end: false },
               staticBlock: true,
+              invalid: isMediaMissing(preview, music.file),
             }),
           ]
         : [],
@@ -949,7 +1059,7 @@ export function TimelinePanel({
         <div className="flex min-w-0 items-center gap-3">
           <h2 className="text-sm font-semibold">{t("editor.timeline.title")}</h2>
           <span className="text-meta text-[var(--text-muted)] tabular-nums">
-            {tf("editor.timeline.length", { time: formatTimecode(totalFrames, fps) })}
+            {tf("editor.timeline.length", { time: formatSeconds(totalFrames, fps) })}
           </span>
           <span className="hidden text-meta text-[var(--text-muted)] lg:inline">
             {t("editor.timeline.snap-hint")}
@@ -1025,7 +1135,7 @@ export function TimelinePanel({
               key={track.key}
               className="tl-row"
               data-track={track.key}
-              data-drop={libDrop?.track === track.key ? "true" : undefined}
+              data-drop={libDrop?.track === track.key ? "true" : libReject === track.key ? "reject" : undefined}
             >
               <div className="tl-label text-meta font-medium" style={{ width: LABEL_W }}>
                 <span className="tl-label-swatch" aria-hidden="true" />

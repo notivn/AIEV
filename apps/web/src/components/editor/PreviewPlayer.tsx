@@ -43,7 +43,12 @@ import {
   totalDurationInFrames,
   type Manifest,
 } from "@engine/manifest";
-import { MediaResolverProvider, type MediaResolver } from "@engine/media";
+import {
+  MediaErrorContext,
+  MediaResolverProvider,
+  type MediaErrorHandler,
+  type MediaResolver,
+} from "@engine/media";
 import { Banner } from "@/components/Banner";
 import { encodeMediaPath, mediaUrl } from "@/lib/api";
 import { useT } from "@/lib/i18n";
@@ -103,7 +108,13 @@ export interface PreviewIssue {
 }
 
 export type PreviewBuild =
-  | { ok: true; manifest: Manifest; durationInFrames: number }
+  | {
+      ok: true;
+      manifest: Manifest;
+      durationInFrames: number;
+      /** File media timeline tham chiếu mà KHÔNG có trên đĩa - đã thay bằng chỗ trống */
+      missing: string[];
+    }
   | { ok: false; issues: PreviewIssue[] };
 
 /** Thời lượng frame như jobs/assemble.ts `frameOf` - null = chưa suy ra được. */
@@ -133,6 +144,12 @@ const sceneFrames = (scene: EditorScene, fps: number): number | null => {
  * do agent ghi tay có thể có) coi như VẮNG MẶT → mặc định, đúng như server
  * chuẩn hóa trước khi render.
  *
+ * File media không có trên đĩa (theo `preview.mediaVersions` - server chỉ ghi
+ * khóa cho file tồn tại) được GỠ khỏi manifest xem trước: scene giữ nguyên độ
+ * dài nhưng thành khung trống (placeholder sẵn có của SceneClip), audio bỏ đi.
+ * Để nguyên thì thẻ <video>/<audio> 404 → Remotion ném lỗi không bắt được và
+ * cả trình phát đen. CHỈ ở bản xem trước - render CLI không đi qua hàm này.
+ *
  * Không đụng vào object đầu vào (scene được sao nông trước khi sửa).
  */
 export function buildPreviewManifest({
@@ -144,6 +161,16 @@ export function buildPreviewManifest({
   project: EditorProjectInfo;
   preview: EditorPreview;
 }): PreviewBuild {
+  const versions = preview.mediaVersions;
+  const missing = new Set<string>();
+  /** File có tên mà không có trên đĩa (server cũ không gửi mediaVersions → không biết, coi như có) */
+  const gone = (rel: unknown): boolean => {
+    if (typeof rel !== "string" || !rel || !versions) return false;
+    if (Object.prototype.hasOwnProperty.call(versions, rel)) return false;
+    missing.add(rel);
+    return true;
+  };
+
   const scenes: EditorScene[] = (timeline.scenes ?? []).map((original) => {
     const scene: EditorScene = { ...original };
     if (typeof scene.src === "string" && scene.src) {
@@ -156,6 +183,14 @@ export function buildPreviewManifest({
     ) {
       delete scene.render;
     }
+    // File nguồn thiếu → khung trống cùng độ dài (timeline và trình phát vẫn khớp frame)
+    if (typeof scene.render === "string" && gone(scene.render)) delete scene.render;
+    if (typeof scene.srcVideo === "string" && scene.srcVideo && gone(scene.srcVideo)) {
+      const frames = sceneFrames(scene, project.fps);
+      delete scene.srcVideo;
+      if (frames !== null) scene.durationInFrames = frames;
+    }
+    if (typeof scene.srcImage === "string" && scene.srcImage && gone(scene.srcImage)) delete scene.srcImage;
     return scene;
   });
 
@@ -169,7 +204,13 @@ export function buildPreviewManifest({
     if (overlap > limit) scenes[i].transitionOverlap = limit;
   }
 
-  const audio = timeline.audio ?? { voice: null, sfx: [], music: null };
+  const audioIn = timeline.audio ?? { voice: null, sfx: [], music: null };
+  const audio = {
+    ...audioIn,
+    voice: gone(audioIn.voice) ? null : audioIn.voice,
+    sfx: Array.isArray(audioIn.sfx) ? audioIn.sfx.filter((x) => !gone(x?.file)) : audioIn.sfx,
+    music: audioIn.music && gone(audioIn.music.file) ? null : audioIn.music,
+  };
   const raw = {
     id: project.id,
     name: project.name,
@@ -189,7 +230,7 @@ export function buildPreviewManifest({
     // schema chỉ nhận object hoặc thiếu hẳn - null nghĩa là "mặc định"
     ...(timeline.subtitleStyle ? { subtitleStyle: timeline.subtitleStyle } : {}),
     overlays: timeline.overlays ?? [],
-    watermark: preview.watermark ?? null,
+    watermark: preview.watermark && !gone(preview.watermark.file) ? preview.watermark : null,
   };
 
   const parsed = manifestSchema.safeParse(raw);
@@ -224,6 +265,7 @@ export function buildPreviewManifest({
     ok: true,
     manifest: parsed.data,
     durationInFrames: Math.max(1, totalDurationInFrames(parsed.data)),
+    missing: [...missing],
   };
 }
 
@@ -234,17 +276,25 @@ type PreviewInputProps = {
   projectId: string;
   /** relPath → mtimeMs; identity giữ ổn định theo NỘI DUNG (xem PreviewPlayer) */
   mediaVersions: Record<string, number> | null;
+  /** File media trình duyệt không nạp/giải được (identity ổn định - useCallback) */
+  onMediaError: MediaErrorHandler;
 };
 
-/** Composition chạy trong Player: Assemble bọc resolver media của project. */
-const PreviewComposition = ({ manifest, projectId, mediaVersions }: PreviewInputProps) => {
+/**
+ * Composition chạy trong Player: Assemble bọc resolver media của project + bộ
+ * nhận lỗi media (chỉ có ở đây - render CLI không có Provider này nên hành vi
+ * render không đổi, xem engine media.tsx).
+ */
+const PreviewComposition = ({ manifest, projectId, mediaVersions, onMediaError }: PreviewInputProps) => {
   const resolve = useMemo(
     () => projectMediaResolver(projectId, mediaVersions),
     [projectId, mediaVersions],
   );
   return (
     <MediaResolverProvider resolve={resolve}>
-      <Assemble {...manifest} />
+      <MediaErrorContext.Provider value={onMediaError}>
+        <Assemble {...manifest} />
+      </MediaErrorContext.Provider>
     </MediaResolverProvider>
   );
 };
@@ -300,10 +350,20 @@ export function PreviewPlayer({
     [versionsKey],
   );
 
+  // File trình duyệt không phát được (codec, file hỏng…) - hiện thành banner
+  // trên trình phát thay vì lỗi không bắt được làm đen cả trình phát
+  const [mediaErrors, setMediaErrors] = useState<string[]>([]);
+  const onMediaError = useCallback<MediaErrorHandler>((src, err) => {
+    console.warn("[preview] không nạp được media:", src, err);
+    setMediaErrors((prev) => (prev.includes(src) ? prev : [...prev, src]));
+  }, []);
+  // Bộ file đổi (render lại, AI thay file) thì cho các file đó cơ hội nạp lại
+  useLayoutEffect(() => setMediaErrors([]), [mediaVersions]);
+
   // inputProps đổi identity là Player render lại cả cây - chỉ đổi khi dữ liệu đổi
   const inputProps = useMemo<PreviewInputProps | null>(
-    () => (build.ok ? { manifest: build.manifest, projectId, mediaVersions } : null),
-    [build, projectId, mediaVersions],
+    () => (build.ok ? { manifest: build.manifest, projectId, mediaVersions, onMediaError } : null),
+    [build, projectId, mediaVersions, onMediaError],
   );
 
   const errorFallback: ErrorFallback = useCallback(
@@ -382,8 +442,26 @@ export function PreviewPlayer({
     />
   );
 
+  const broken = [...build.missing, ...mediaErrors.filter((f) => !build.missing.includes(f))];
+  // Nổi trên khung phát (không đẩy bố cục); tên file đầy đủ ở phần chi tiết
+  const mediaBanner =
+    broken.length > 0 ? (
+      <div className="absolute left-2 right-2 top-2 z-10">
+        <Banner
+          tone="danger"
+          message={tf("editor.player.media-missing", { n: broken.length })}
+          detail={broken.join("\n")}
+        />
+      </div>
+    ) : null;
+
   if (fit === "width") {
-    return <div className={className}>{player({ width: "100%" })}</div>;
+    return (
+      <div className={`relative ${className ?? ""}`}>
+        {player({ width: "100%" })}
+        {mediaBanner}
+      </div>
+    );
   }
 
   let size: { width: number; height: number } | null = null;
@@ -399,6 +477,7 @@ export function PreviewPlayer({
           {player(size)}
         </div>
       )}
+      {mediaBanner}
     </div>
   );
 }

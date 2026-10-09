@@ -144,6 +144,19 @@ export function formatTimecode(frame: number, fps: number): string {
   return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}.${String(ff).padStart(2, "0")}`;
 }
 
+/**
+ * Giây thập phân cho người dùng - CÙNG cách viết với inspector (ô số "s"):
+ * "2.67s", từ 1 phút trở lên "1:02.67". Khối/tiêu đề timeline dùng cái này;
+ * chỉ thanh phát giữ mm:ss.ff (khung hình) như NLE.
+ */
+export function formatSeconds(frames: number, fps: number): string {
+  const sec = Math.max(0, Math.round((frames / fps) * 100) / 100);
+  if (sec < 60) return `${sec.toFixed(2).replace(/\.?0+$/, "") || "0"}s`;
+  const mm = Math.floor(sec / 60);
+  const rest = (sec - mm * 60).toFixed(2).padStart(5, "0");
+  return `${mm}:${rest}`;
+}
+
 /** Nhãn thước giờ: 0:05, 1:30… */
 export function formatRulerLabel(sec: number): string {
   const s = Math.round(sec * 10) / 10;

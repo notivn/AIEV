@@ -29,3 +29,20 @@ export const MediaResolverProvider: React.FC<{
 
 /** Resolver đang có hiệu lực (staticFile khi không có Provider). */
 export const useMediaSrc = (): MediaResolver => useContext(MediaResolverContext);
+
+/**
+ * Lỗi nạp media (file hỏng, codec trình duyệt không giải được, 404) - CHỈ trình
+ * phát trong dashboard cung cấp handler này. Không có Provider (render CLI) thì
+ * `useMediaErrorProps()(src)` trả `{}`: props của <OffthreadVideo>/<Audio>/<Img>
+ * y hệt trước, Remotion vẫn hủy render khi file hỏng như cũ. Có Provider thì
+ * lỗi đi vào handler thay vì thành lỗi không bắt được làm trắng cả trình phát
+ * ("Pass an onError() prop").
+ */
+export type MediaErrorHandler = (src: string, err: unknown) => void;
+
+export const MediaErrorContext = createContext<MediaErrorHandler | null>(null);
+
+export const useMediaErrorProps = (): ((src: string) => { onError?: (err: unknown) => void }) => {
+  const handler = useContext(MediaErrorContext);
+  return (src) => (handler ? { onError: (err: unknown) => handler(src, err) } : {});
+};

@@ -82,7 +82,7 @@ import {
   duplicateSelection,
   isCueSel,
   moveSceneBy,
-  newCueDuration,
+  newCuePlacement,
   newFootageScene,
   newImageScene,
   normalizeTimeline,
@@ -106,6 +106,8 @@ import { computeSceneSpans, totalFramesOf } from "./timing";
 const AUTOSAVE_MS = 700;
 /** Tải lại timeline tối đa một lần mỗi khoảng này khi AI đang ghi file */
 const REFETCH_THROTTLE_MS = 1500;
+/** Hỏi lại version của server mỗi khoảng này (tab đang hiện) - bắt thay đổi từ tab khác */
+const VERSION_POLL_MS = 15_000;
 const TIMELINE_H_KEY = "aiev-editor-timeline-h";
 /**
  * Vừa khít 7 track (32px) + thước + thanh tiêu đề - không cuộn dọc mà cũng
@@ -116,6 +118,8 @@ const TIMELINE_H_DEFAULT = 304;
 const TIMELINE_H_MIN = 180;
 /** Cột Thư viện gấp/mở - nhớ theo trình duyệt (chỉ là tiện ích, mất thì về mở) */
 const LIBRARY_KEY = "aiev-editor-library";
+/** Cửa sổ hẹp hơn mức này thì cột Thư viện tự gấp (xem toggleLibrary) */
+const LIBRARY_AUTO_COLLAPSE_PX = 1360;
 /** Nhãn lịch sử phiên bản cho mọi lần tự lưu (server gộp các PUT cùng nhãn trong 10s) */
 const SAVE_LABEL = "editor";
 /** Tool của agent có thể đã ghi meta.json → tải lại timeline */
@@ -319,6 +323,26 @@ export function VideoEditor({ projectId }: { projectId: string }) {
     void load();
     // resyncTick: SSE vừa nối lại - có thể đã lỡ event AI/job, tải lại cho chắc
   }, [load, resyncTick]);
+
+  // Tab khác (hoặc ai đó sửa meta.json ngoài AI của project) lưu thì SSE không
+  // báo gì - tab đang ngồi yên sẽ không bao giờ biết, tới lúc sửa mới đụng xung
+  // đột. Hỏi lại server định kỳ (chỉ khi tab đang hiện) và ngay khi quay lại
+  // tab: sạch thì nạp bản mới im lặng, đang bẩn thì banner xung đột hiện SỚM
+  // (load() lo cả hai). GET /timeline rẻ: thông số ffprobe cache theo mtime.
+  useEffect(() => {
+    const tick = () => {
+      if (document.visibilityState === "visible" && !saveInFlight.current) requestRefetch();
+    };
+    const timer = window.setInterval(tick, VERSION_POLL_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") requestRefetch();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [requestRefetch]);
 
   // Phiên AI của project (để lọc SSE agent) + job render đang có
   useEffect(() => {
@@ -785,7 +809,9 @@ export function VideoEditor({ projectId }: { projectId: string }) {
           : kind === "subtitle"
             ? { kind, text: t("editor.add.subtitle-text") }
             : { kind, word: t("editor.caption.new-word") };
-      const result = addCue(s.timeline, cue, frame, newCueDuration(frame, totalRef.current, fps));
+      // Không bao giờ đặt cue ra sau hết video (playhead ở End → lùi về 2s trước cuối)
+      const place = newCuePlacement(frame, totalRef.current, fps);
+      const result = addCue(s.timeline, cue, place.from, place.durationInFrames);
       if (result.timeline === s.timeline) return;
       edit(() => result.timeline, { selection: result.selection });
     },
@@ -794,30 +820,71 @@ export function VideoEditor({ projectId }: { projectId: string }) {
 
   // ================================================================ thư viện
 
+  // Lựa chọn của người dùng (nhớ theo trình duyệt) + màn hẹp. Dưới
+  // LIBRARY_AUTO_COLLAPSE_PX (1280px có panel chat mở), cột thư viện ăn mất
+  // chỗ của trình phát → tự gấp, như thanh bên của shell trên route này: lần
+  // gấp tự động KHÔNG ghi vào localStorage, người dùng mở lại trong lúc màn hẹp
+  // thì chỉ có hiệu lực trong phiên (không đè lựa chọn cho màn rộng).
+  const [libraryPref, setLibraryPref] = useState<boolean>(false);
+  const [narrow, setNarrow] = useState(false);
+  const [narrowOverride, setNarrowOverride] = useState<boolean | null>(null);
   useEffect(() => {
     try {
-      if (window.localStorage.getItem(LIBRARY_KEY) === "collapsed") setLibraryCollapsed(true);
+      if (window.localStorage.getItem(LIBRARY_KEY) === "collapsed") setLibraryPref(true);
     } catch {
       // localStorage bị chặn - cột mở như mặc định
     }
+    const mq = window.matchMedia(`(max-width: ${LIBRARY_AUTO_COLLAPSE_PX - 1}px)`);
+    const update = () => {
+      setNarrow(mq.matches);
+      setNarrowOverride(null);
+    };
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
   }, []);
+  useEffect(() => {
+    setLibraryCollapsed(narrow ? (narrowOverride ?? true) : libraryPref);
+  }, [narrow, narrowOverride, libraryPref]);
 
-  const toggleLibrary = useCallback((collapsed: boolean) => {
-    setLibraryCollapsed(collapsed);
-    try {
-      window.localStorage.setItem(LIBRARY_KEY, collapsed ? "collapsed" : "open");
-    } catch {
-      // không nhớ được - vẫn gấp/mở cho phiên này
-    }
-  }, []);
+  const toggleLibrary = useCallback(
+    (collapsed: boolean) => {
+      if (narrow) {
+        setNarrowOverride(collapsed);
+        return;
+      }
+      setLibraryPref(collapsed);
+      try {
+        window.localStorage.setItem(LIBRARY_KEY, collapsed ? "collapsed" : "open");
+      } catch {
+        // không nhớ được - vẫn gấp/mở cho phiên này
+      }
+    },
+    [narrow],
+  );
 
   /** Ghi thông số file vừa thêm vào `preview.media` - trim/khối sfx biết độ dài ngay, không chờ tải lại. */
   const rememberMedia = useCallback((rel: string, media: TimelineMediaInfo) => {
     setInfo((prev) => {
-      if (!prev || prev.preview.media[rel]) return prev;
-      return { ...prev, preview: { ...prev.preview, media: { ...prev.preview.media, [rel]: media } } };
+      if (!prev) return prev;
+      const versions = prev.preview.mediaVersions;
+      // File vừa chép/đo xong chắc chắn CÓ trên đĩa: ghi luôn vào mediaVersions
+      // (0 = chưa biết mtime, lần tải lại kế sẽ có số thật) - không thì khối mới
+      // thêm bị đánh dấu "file không tồn tại" cho tới lần tải lại
+      const needVersion = !!versions && !Object.prototype.hasOwnProperty.call(versions, rel);
+      if (prev.preview.media[rel] && !needVersion) return prev;
+      return {
+        ...prev,
+        preview: {
+          ...prev.preview,
+          media: prev.preview.media[rel] ? prev.preview.media : { ...prev.preview.media, [rel]: media },
+          mediaVersions: needVersion ? { ...versions, [rel]: 0 } : versions,
+        },
+      };
     });
-  }, []);
+    // Lấy mtime thật + thông số đầy đủ từ server
+    requestRefetch();
+  }, [requestRefetch]);
 
   const measure = useCallback(
     async (rel: string): Promise<number | null> => {
@@ -1161,12 +1228,21 @@ export function VideoEditor({ projectId }: { projectId: string }) {
   // ================================================================ kéo cao timeline
 
   useEffect(() => {
+    let saved = 0;
     try {
-      const saved = Number(window.localStorage.getItem(TIMELINE_H_KEY));
-      if (Number.isFinite(saved) && saved >= TIMELINE_H_MIN) setTimelineHeight(saved);
+      saved = Number(window.localStorage.getItem(TIMELINE_H_KEY) ?? 0);
     } catch {
       // localStorage bị chặn - dùng mặc định
     }
+    if (Number.isFinite(saved) && saved >= TIMELINE_H_MIN) {
+      setTimelineHeight(saved);
+      return;
+    }
+    // Chưa chỉnh tay: màn THẤP (1280x720…) thì timeline mặc định thấp hơn -
+    // 304px cố định ở đó chỉ chừa cho trình phát chưa tới 100px
+    setTimelineHeight(
+      Math.max(TIMELINE_H_MIN, Math.min(TIMELINE_H_DEFAULT, Math.round(window.innerHeight * 0.34))),
+    );
   }, []);
 
   const maxTimelineHeight = () => Math.max(TIMELINE_H_MIN, Math.round(window.innerHeight * 0.65));
@@ -1191,6 +1267,9 @@ export function VideoEditor({ projectId }: { projectId: string }) {
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     resizeRef.current = { startY: e.clientY, startH: timelineHeight, pointerId: e.pointerId };
+    // Kéo tay nắm mà con trỏ lướt qua chữ là trình duyệt bôi đen cả trang -
+    // tắt chọn chữ trên body suốt lượt kéo, trả lại khi nhả
+    document.body.style.userSelect = "none";
   };
   const onResizeMove = (e: ReactPointerEvent<HTMLDivElement>) => {
     const r = resizeRef.current;
@@ -1202,6 +1281,7 @@ export function VideoEditor({ projectId }: { projectId: string }) {
     const r = resizeRef.current;
     if (!r || r.pointerId !== e.pointerId) return;
     resizeRef.current = null;
+    document.body.style.userSelect = "";
     persistHeight(timelineHeight);
   };
 
@@ -1474,7 +1554,13 @@ export function VideoEditor({ projectId }: { projectId: string }) {
             }
           />
         )}
-        {notice && <Banner tone="muted" message={notice} />}
+        {/* Thông báo thoáng qua (4s): nổi bên trên, KHÔNG chen vào dòng chảy -
+            chen vào là cả trình phát + timeline bị đẩy xuống rồi bật lên lại */}
+        {notice && (
+          <div className="editor-notice" role="status" aria-live="polite">
+            <Banner tone="muted" message={notice} />
+          </div>
+        )}
 
         <div className="editor-main" data-library={libraryCollapsed ? "collapsed" : "open"}>
           <LibraryPanel
@@ -1539,6 +1625,7 @@ export function VideoEditor({ projectId }: { projectId: string }) {
           onPointerMove={onResizeMove}
           onPointerUp={onResizeUp}
           onPointerCancel={onResizeUp}
+          onLostPointerCapture={onResizeUp}
           onKeyDown={(e) => {
             if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
             e.preventDefault();

@@ -13,6 +13,12 @@ import { parseProgressLine } from "./progress.js";
  *   draft : npx hyperframes render <src> --quality draft    --output renders/<sceneId>.draft.mp4
  *   final : npx hyperframes render <src> --quality standard --output renders/<sceneId>.mp4
  * Chạy cho mọi scene có `src` trong meta.json, hoặc riêng scene nếu job có sceneId.
+ *
+ * Render vào file TẠM (renders/.tmp/) rồi mới thay file đích bằng rename khi
+ * thành công. hyperframes xóa/ghi đè file `--output` ngay lúc bắt đầu, nên
+ * render thẳng vào đích thì một lượt hỏng/bị hủy để lại scene KHÔNG còn bản
+ * xem trước nào (trình chỉnh sửa hiện khung trống, assemble thiếu scene) - mất
+ * luôn bản cũ đang dùng tốt.
  */
 export async function runSceneRender(ctx: JobCtx): Promise<void> {
   const { projectId, type, sceneId } = ctx.job;
@@ -47,6 +53,11 @@ export async function runSceneRender(ctx: JobCtx): Promise<void> {
       typeof scene.render === "string" && scene.render ? scene.render : `renders/${scene.id}.mp4`;
     const outRel = draft ? finalRel.replace(/\.mp4$/i, ".draft.mp4") : finalRel;
     ensureDir(path.dirname(path.join(projectDir, outRel)));
+    // File tạm theo job + scene (đuôi .mp4 để hyperframes chọn đúng định dạng);
+    // thư mục ẩn nên không lẫn vào danh sách render/asset nào
+    const tmpRel = path.posix.join("renders", ".tmp", `${ctx.job.id}-${scene.id}.mp4`);
+    const tmpAbs = path.join(projectDir, tmpRel);
+    ensureDir(path.dirname(tmpAbs));
     const quality = draft ? "draft" : "standard";
     const label = `Scene ${scene.id} (${i + 1}/${total})`;
     ctx.progress(Math.floor((i / total) * 100), label);
@@ -64,19 +75,31 @@ export async function runSceneRender(ctx: JobCtx): Promise<void> {
       quality,
       ...hyperframesSpeedArgs(draft),
       "--output",
-      outRel,
+      tmpRel,
     ];
-    await ctx.exec(process.execPath, args, projectDir, (line) => {
-      const pct = parseProgressLine(line);
-      if (pct !== null) {
-        // Tiến độ tổng = scene đã xong + phần trăm scene hiện tại
-        ctx.progress(Math.floor(((i + pct / 100) / total) * 100), label);
-      }
-    });
-
     const outAbs = path.join(projectDir, outRel);
-    if (!fs.existsSync(outAbs)) {
-      throw new Error(`Render xong nhưng không thấy file ${outRel} - kiểm tra log hyperframes`);
+    try {
+      await ctx.exec(process.execPath, args, projectDir, (line) => {
+        const pct = parseProgressLine(line);
+        if (pct !== null) {
+          // Tiến độ tổng = scene đã xong + phần trăm scene hiện tại
+          ctx.progress(Math.floor(((i + pct / 100) / total) * 100), label);
+        }
+      });
+      if (ctx.isCanceled()) return; // bị hủy: giữ nguyên bản render cũ
+      if (!fs.existsSync(tmpAbs) || fs.statSync(tmpAbs).size === 0) {
+        throw new Error(`Render xong nhưng không thấy file ${outRel} - kiểm tra log hyperframes`);
+      }
+      // Thay nguyên tử (cùng ổ đĩa): bản cũ chỉ biến mất khi bản mới đã đủ.
+      // Windows: rename đè file đang mở (trình chỉnh sửa đang phát bản cũ) có thể
+      // EPERM/EBUSY - khi đó chép đè (vẫn chỉ sau khi bản mới đã render xong)
+      try {
+        fs.renameSync(tmpAbs, outAbs);
+      } catch {
+        fs.copyFileSync(tmpAbs, outAbs);
+      }
+    } finally {
+      fs.rmSync(tmpAbs, { force: true });
     }
     lastOutputRel = `video-projects/${projectId}/${outRel}`;
   }

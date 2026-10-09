@@ -1,7 +1,7 @@
 import React from "react";
 import { AbsoluteFill, Img, OffthreadVideo, useCurrentFrame } from "remotion";
 import type { Scene, Zoom } from "../manifest";
-import { useMediaSrc } from "../media";
+import { useMediaErrorProps, useMediaSrc } from "../media";
 
 const videoStyle: React.CSSProperties = {
   width: "100%",
@@ -86,11 +86,12 @@ export const SceneClip: React.FC<{
   fps: number;
 }> = ({ scene, fps }) => {
   const mediaSrc = useMediaSrc();
+  const errorProps = useMediaErrorProps();
 
   if (scene.render) {
     return (
       <ZoomWrapper zoom={scene.zoom}>
-        <OffthreadVideo src={mediaSrc(scene.render)} style={videoStyle} />
+        <OffthreadVideo src={mediaSrc(scene.render)} style={videoStyle} {...errorProps(scene.render)} />
       </ZoomWrapper>
     );
   }
@@ -106,6 +107,7 @@ export const SceneClip: React.FC<{
           endAt={endAt}
           muted={scene.muted ?? false}
           style={videoStyle}
+          {...errorProps(scene.srcVideo)}
         />
       </ZoomWrapper>
     );
@@ -114,7 +116,7 @@ export const SceneClip: React.FC<{
   if (scene.srcImage) {
     return (
       <ZoomWrapper zoom={scene.zoom}>
-        <Img src={mediaSrc(scene.srcImage)} style={videoStyle} />
+        <Img src={mediaSrc(scene.srcImage)} style={videoStyle} {...errorProps(scene.srcImage)} />
       </ZoomWrapper>
     );
   }

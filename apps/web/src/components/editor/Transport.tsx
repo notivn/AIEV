@@ -25,7 +25,7 @@ export function Transport({
   onStep: (delta: number) => void;
   disabled?: boolean;
 }) {
-  const { t } = useT();
+  const { t, tf } = useT();
   const { playback, fps, seek } = useEditor();
   const frame = usePlayheadFrame(playback);
   const playing = useIsPlaying(playback);
@@ -64,7 +64,14 @@ export function Transport({
           <SkipForward size={16} strokeWidth={1.75} />
         </IconButton>
       </div>
-      <p className="text-sm tabular-nums" aria-live="off">
+      {/* Không bao giờ xuống dòng (khung hẹp: nhóm nút tự ẩn bớt, mốc giờ giữ
+          nguyên); mm:ss.ff kiểu NLE - ff là KHUNG HÌNH, không phải phần trăm giây,
+          nên có chú thích khi rê chuột */}
+      <p
+        className="shrink-0 whitespace-nowrap text-sm tabular-nums"
+        aria-live="off"
+        title={tf("editor.transport.time-hint", { fps: Math.round(fps) })}
+      >
         <span className="font-medium">{formatTimecode(frame, fps)}</span>
         <span className="text-[var(--text-muted)]"> / {formatTimecode(totalFrames, fps)}</span>
       </p>

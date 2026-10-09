@@ -147,6 +147,27 @@ export function sceneKind(scene: TimelineScene): SceneKind {
   return "empty";
 }
 
+/**
+ * File media có trên đĩa không, theo `preview.mediaVersions` (server chỉ ghi
+ * khóa cho file TỒN TẠI). Không có mediaVersions (server cũ) = không biết →
+ * coi như có, đừng báo động giả.
+ */
+export function isMediaMissing(preview: TimelinePreview, rel: unknown): boolean {
+  if (typeof rel !== "string" || !rel) return false;
+  const versions = preview.mediaVersions;
+  return !!versions && !Object.prototype.hasOwnProperty.call(versions, rel);
+}
+
+/**
+ * File nguồn của scene bị thiếu (footage/ảnh/render khai tay) - null = đủ.
+ * Scene HyperFrames chưa render KHÔNG tính là thiếu (đó là "chưa render").
+ */
+export function sceneMissingMedia(scene: TimelineScene, preview: TimelinePreview): string | null {
+  const kind = sceneKind(scene);
+  const rel = kind === "footage" || kind === "image" || kind === "render" ? sceneSourcePath(scene) : null;
+  return rel && isMediaMissing(preview, rel) ? rel : null;
+}
+
 /** Đường dẫn file mà scene hiển thị (để làm nhãn) - null nếu không có. */
 export function sceneSourcePath(scene: TimelineScene): string | null {
   switch (sceneKind(scene)) {
@@ -239,6 +260,16 @@ export function trimScene(
   delta: number,
   ctx: OpsContext,
 ): Timeline {
+  return withPunchInRetimed(tl, trimSceneRaw(tl, index, edge, delta, ctx), index, ctx.fps);
+}
+
+function trimSceneRaw(
+  tl: Timeline,
+  index: number,
+  edge: "start" | "end",
+  delta: number,
+  ctx: OpsContext,
+): Timeline {
   const scene = tl.scenes[index];
   if (!scene || !Number.isFinite(delta)) return tl;
   const d = Math.round(delta);
@@ -286,6 +317,34 @@ export function trimScene(
 }
 
 // ---- zoom (camera move) - mirror của scaleAtFrame trong SceneClip
+
+/**
+ * Punch-in ĐƠN GIẢN (đúng 2 mốc: frame 0 và cuối scene - thứ inspector tạo ra)
+ * phải đi theo độ dài scene: trim/đổi độ dài mà mốc cuối đứng yên thì scene
+ * dài ra là zoom dừng sớm rồi đứng hình, ngắn đi là zoom bị cắt giữa chừng.
+ * Mốc cuối "đang ở cuối" = frame dur-1 hoặc dur (bản cũ ghi dur). Zoom tùy
+ * biến (nhiều mốc, AI viết) thì không đoán - giữ nguyên.
+ */
+function retimePunchIn(scene: TimelineScene, oldDur: number | null, newDur: number | null): TimelineScene {
+  const keys = scene.zoom?.keys;
+  if (!scene.zoom || !Array.isArray(keys) || keys.length !== 2 || oldDur === null || newDur === null) return scene;
+  if (oldDur === newDur) return scene;
+  const [a, b] = sortKeys(keys);
+  if (!a || !b || a.frame !== 0 || (b.frame !== oldDur - 1 && b.frame !== oldDur)) return scene;
+  const end = Math.max(1, newDur - 1);
+  if (b.frame === end) return scene;
+  return { ...scene, zoom: { ...scene.zoom, keys: [a, { ...b, frame: end }] } };
+}
+
+/** Bọc một thao tác đổi độ dài scene `index`: punch-in đơn giản đi theo (retimePunchIn). */
+function withPunchInRetimed(before: Timeline, after: Timeline, index: number, fps: number): Timeline {
+  if (after === before) return after;
+  const old = before.scenes[index];
+  const cur = after.scenes[index];
+  if (!old || !cur) return after;
+  const next = retimePunchIn(cur, sceneDurationFrames(old, fps), sceneDurationFrames(cur, fps));
+  return next === cur ? after : { ...after, scenes: replaceAt(after.scenes, index, next) };
+}
 
 const EASE: Record<string, (t: number) => number> = {
   linear: (t) => t,
@@ -477,7 +536,7 @@ export function setFootageWindow(
     to: frameToSec(b, ctx.fps),
   };
   if (typeof scene.durationInFrames === "number") patch.durationInFrames = b - a;
-  return patchScene(tl, index, patch);
+  return withPunchInRetimed(tl, patchScene(tl, index, patch), index, ctx.fps);
 }
 
 /** Đổi độ dài (frame) của scene ảnh/HyperFrames - kẹp [1, bản render]. */
@@ -492,7 +551,7 @@ export function setSceneDuration(
   const max = sceneMaxFrames(scene, ctx);
   const cur = typeof scene.durationInFrames === "number" ? scene.durationInFrames : 1;
   const upper = max === null ? Number.POSITIVE_INFINITY : Math.max(max, cur);
-  return patchScene(tl, index, { durationInFrames: clampInt(frames, 1, upper) });
+  return withPunchInRetimed(tl, patchScene(tl, index, { durationInFrames: clampInt(frames, 1, upper) }), index, ctx.fps);
 }
 
 /** transitionOverlap sang scene kế (frame) - 0 = cắt thẳng thì xóa khóa. */
@@ -522,9 +581,10 @@ export function setScenePunchIn(
   if (!scene) return tl;
   if (punch === null) return patchScene(tl, index, { zoom: undefined });
   const duration = sceneDurationFrames(scene, ctx.fps) ?? 1;
+  // Mốc cuối ở frame CUỐI của scene (dur-1): tới đúng khung cuối là đạt scale đích
   const keys: TimelineZoomKey[] = [
     { frame: 0, scale: punch.startScale, ease: punch.ease },
-    { frame: Math.max(1, duration), scale: punch.endScale },
+    { frame: Math.max(1, duration - 1), scale: punch.endScale },
   ];
   return patchScene(tl, index, { zoom: { ...(scene.zoom ?? {}), keys } });
 }
@@ -629,20 +689,47 @@ function shiftWords(cue: TimelineCaptionCue, delta: number): TimelineCaptionCue 
   };
 }
 
-/** Kẹp mọi từ vào [from, end] của cue (mép cue vừa đổi). */
+/**
+ * Kẹp mọi từ vào [from, end] của cue (mép cue vừa đổi) mà mỗi từ vẫn còn ≥ 1
+ * frame, theo đúng thứ tự: kẹp thẳng thì các từ rơi ra ngoài dồn hết về một
+ * frame - karaoke sáng cả cụm cùng lúc. resizeCue đã giữ cue dài ≥ số từ nên
+ * luôn đủ chỗ. Từ nằm gọn bên trong và không chồng nhau thì giữ nguyên.
+ */
 function clampWords(cue: TimelineCaptionCue): TimelineCaptionCue {
   if (!captionWordsOf(cue)) return cue;
   const lo = cue.from;
   const hi = cueEnd(cue);
+  const n = cue.words.length;
+  if (hi - lo < n) {
+    // Không đủ chỗ (dữ liệu cũ) - kẹp thẳng như trước, không chia được
+    let changed = false;
+    const words = cue.words.map((w) => {
+      const start = Math.min(hi, Math.max(lo, w.start));
+      const end = Math.min(hi, Math.max(start, w.end));
+      if (start === w.start && end === w.end) return w;
+      changed = true;
+      return { ...w, start, end };
+    });
+    return changed ? { ...cue, words } : cue;
+  }
   let changed = false;
-  const words = cue.words.map((w) => {
-    const start = Math.min(hi, Math.max(lo, w.start));
-    const end = Math.min(hi, Math.max(start, w.end));
+  let cursor = lo;
+  const words = cue.words.map((w, i) => {
+    // chừa đúng 1 frame cho mỗi từ còn lại phía sau
+    const start = Math.min(hi - (n - i), Math.max(cursor, lo, w.start));
+    const end = Math.max(start + 1, Math.min(hi - (n - i - 1), w.end));
+    cursor = end;
     if (start === w.start && end === w.end) return w;
     changed = true;
     return { ...w, start, end };
   });
   return changed ? { ...cue, words } : cue;
+}
+
+/** Độ dài tối thiểu của cue: karaoke cần ≥ 1 frame cho mỗi từ. */
+function minCueFrames(tl: Timeline, kind: CueKind, index: number): number {
+  if (kind !== "captions") return 1;
+  return Math.max(1, captionWordsOf(tl.captions[index])?.length ?? 1);
 }
 
 /**
@@ -684,7 +771,18 @@ export function cueList(tl: Timeline, kind: CueKind): BaseCue[] {
 }
 
 /** Dời cue `delta` frame (không trước frame 0). Karaoke: từ đi theo cue. */
-export function moveCue(tl: Timeline, kind: CueKind, index: number, delta: number): Timeline {
+/**
+ * `maxStart` (tùy chọn) = frame bắt đầu muộn nhất được phép (kéo trên timeline
+ * truyền tổng frame - 1): kéo quá tay không đẩy cue ra sau hết video. Cue ĐÃ ở
+ * ngoài từ trước thì không bị kéo giật về - chỉ không cho đi xa thêm.
+ */
+export function moveCue(
+  tl: Timeline,
+  kind: CueKind,
+  index: number,
+  delta: number,
+  maxStart: number = Number.POSITIVE_INFINITY,
+): Timeline {
   const d = Math.round(delta);
   if (!Number.isFinite(d) || d === 0) return tl;
   return editCue(
@@ -692,7 +790,7 @@ export function moveCue(tl: Timeline, kind: CueKind, index: number, delta: numbe
     kind,
     index,
     (cue) => {
-      const from = Math.max(0, cue.from + d);
+      const from = Math.min(Math.max(0, cue.from + d), Math.max(cue.from, maxStart));
       return from === cue.from ? cue : { ...cue, from };
     },
     (before, after) => shiftWords(after, after.from - before.from),
@@ -719,6 +817,7 @@ export function resizeCue(
 ): Timeline {
   const d = Math.round(delta);
   if (!Number.isFinite(d) || d === 0) return tl;
+  const minDur = minCueFrames(tl, kind, index);
   return editCue(
     tl,
     kind,
@@ -726,10 +825,11 @@ export function resizeCue(
     (cue) => {
       const end = cueEnd(cue);
       if (edge === "start") {
-        const from = clampInt(cue.from + d, 0, end - 1);
+        // Karaoke: mép đầu dừng sớm để mỗi từ còn ≥ 1 frame (không dồn cụm)
+        const from = clampInt(cue.from + d, 0, Math.max(cue.from, end - minDur));
         return from === cue.from ? cue : { ...cue, from, durationInFrames: end - from };
       }
-      const durationInFrames = Math.max(1, cue.durationInFrames + d);
+      const durationInFrames = Math.max(Math.min(minDur, cue.durationInFrames), cue.durationInFrames + d, 1);
       return durationInFrames === cue.durationInFrames ? cue : { ...cue, durationInFrames };
     },
     (_before, after) => clampWords(after),
@@ -958,11 +1058,17 @@ export function normalizeTimeline(tl: Timeline): Timeline {
 
 // ================================================================ audio
 
-export function moveSfx(tl: Timeline, index: number, delta: number): Timeline {
+/** Như moveCue: `maxStart` chặn kéo sfx ra sau hết video. */
+export function moveSfx(
+  tl: Timeline,
+  index: number,
+  delta: number,
+  maxStart: number = Number.POSITIVE_INFINITY,
+): Timeline {
   const sfx = tl.audio.sfx[index];
   const d = Math.round(delta);
   if (!sfx || !Number.isFinite(d) || d === 0) return tl;
-  const atFrame = Math.max(0, sfx.atFrame + d);
+  const atFrame = Math.min(Math.max(0, sfx.atFrame + d), Math.max(sfx.atFrame, maxStart));
   if (atFrame === sfx.atFrame) return tl;
   return patchSfx(tl, index, { atFrame });
 }
@@ -1035,6 +1141,31 @@ export function deleteSelection(tl: Timeline, sel: Selection | null): Timeline {
   }
 }
 
+/**
+ * Chỗ đặt bản nhân bản của cue `index` (dài `dur`): ngay sau bản gốc nếu lọt
+ * trước cue kế tiếp trên CÙNG track, không thì khe trống đầu tiên đủ dài phía
+ * sau, hết khe thì sau cue cuối. Đặt đè lên cue kế là hai câu chồng nhau.
+ */
+function freeSlotAfter(list: BaseCue[], index: number, dur: number): number {
+  const self = list[index];
+  let at = cueEnd(self);
+  const others = list
+    .filter((c, i) => i !== index && c && Number.isFinite(c.from) && Number.isFinite(c.durationInFrames))
+    .sort((a, b) => a.from - b.from);
+  for (const c of others) {
+    if (cueEnd(c) <= at) continue; // nằm hẳn trước chỗ đang xét
+    if (c.from >= at + dur) break; // khe [at, at+dur) trống
+    at = Math.max(at, cueEnd(c));
+  }
+  return at;
+}
+
+/** Vị trí chèn theo thứ tự thời gian (cùng mốc thì đứng sau) - như addCue. */
+const sortedInsertIndex = (list: BaseCue[], from: number): number => {
+  const i = list.findIndex((c) => c && c.from > from);
+  return i === -1 ? list.length : i;
+};
+
 export function canDuplicate(tl: Timeline, sel: Selection | null): boolean {
   if (!sel || !selectionExists(tl, sel)) return false;
   // Nhân bản dữ liệu lỗi chỉ đẻ thêm dữ liệu lỗi (và chặn lưu khóa đó)
@@ -1066,28 +1197,28 @@ export function duplicateSelection(
     }
     case "caption": {
       const cue = tl.captions[sel.index];
-      const copy = shiftWords(
-        { ...structuredClone(cue), from: cueEnd(cue) },
-        cue.durationInFrames,
-      );
+      const from = freeSlotAfter(tl.captions, sel.index, cue.durationInFrames);
+      const copy = shiftWords({ ...structuredClone(cue), from }, from - cue.from);
+      const at = sortedInsertIndex(tl.captions, from);
       const captions = tl.captions.slice();
-      captions.splice(sel.index + 1, 0, copy);
-      return { timeline: { ...tl, captions }, selection: { kind: "caption", index: sel.index + 1 } };
+      captions.splice(at, 0, copy);
+      return { timeline: { ...tl, captions }, selection: { kind: "caption", index: at } };
     }
     case "subtitle": {
       const cue = tl.subtitles[sel.index];
+      const from = freeSlotAfter(tl.subtitles, sel.index, cue.durationInFrames);
+      const at = sortedInsertIndex(tl.subtitles, from);
       const subtitles = tl.subtitles.slice();
-      subtitles.splice(sel.index + 1, 0, { ...structuredClone(cue), from: cueEnd(cue) });
-      return {
-        timeline: { ...tl, subtitles },
-        selection: { kind: "subtitle", index: sel.index + 1 },
-      };
+      subtitles.splice(at, 0, { ...structuredClone(cue), from });
+      return { timeline: { ...tl, subtitles }, selection: { kind: "subtitle", index: at } };
     }
     case "overlay": {
       const cue = tl.overlays[sel.index];
+      const from = freeSlotAfter(tl.overlays, sel.index, cue.durationInFrames);
+      const at = sortedInsertIndex(tl.overlays, from);
       const overlays = tl.overlays.slice();
-      overlays.splice(sel.index + 1, 0, { ...structuredClone(cue), from: cueEnd(cue) });
-      return { timeline: { ...tl, overlays }, selection: { kind: "overlay", index: sel.index + 1 } };
+      overlays.splice(at, 0, { ...structuredClone(cue), from });
+      return { timeline: { ...tl, overlays }, selection: { kind: "overlay", index: at } };
     }
     case "sfx": {
       const sfx = tl.audio.sfx[sel.index];
@@ -1313,15 +1444,25 @@ export function addCue(
 }
 
 /**
- * Độ dài cue mới tại `from`: mặc định 2 giây; playhead gần cuối video thì co lại
- * cho cue kết thúc cùng video - trừ khi chỗ còn lại ngắn hơn nửa giây (cue vài
- * frame không ai đọc kịp), khi đó vẫn giữ đủ 2 giây.
+ * Chỗ đặt cue mới thêm tại playhead `frame`: mặc định dài 2 giây bắt đầu tại
+ * playhead; gần cuối video thì co lại cho kết thúc cùng video; còn chưa tới nửa
+ * giây (playhead ở End…) thì LÙI điểm bắt đầu về 2 giây trước cuối - cue vài
+ * frame không ai đọc kịp, mà cue thò ra sau hết video thì không bao giờ hiện.
+ * Video ngắn hơn 2 giây: phủ cả video (≥ 1 frame).
  */
-export function newCueDuration(from: number, totalFrames: number, fps: number): number {
+export function newCuePlacement(
+  frame: number,
+  totalFrames: number,
+  fps: number,
+): { from: number; durationInFrames: number } {
+  const total = Math.max(1, Math.round(totalFrames));
   const full = Math.max(1, Math.round(NEW_CUE_SEC * fps));
-  const remaining = totalFrames - Math.round(from);
-  if (remaining >= full) return full;
-  return remaining >= Math.round(fps / 2) ? remaining : full;
+  const from = Math.min(Math.max(0, Math.round(frame)), total - 1);
+  const remaining = total - from;
+  if (remaining >= full) return { from, durationInFrames: full };
+  if (remaining >= Math.round(fps / 2)) return { from, durationInFrames: remaining };
+  const start = Math.max(0, total - full);
+  return { from: start, durationInFrames: Math.max(1, total - start) };
 }
 
 /**
