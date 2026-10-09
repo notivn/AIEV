@@ -5,12 +5,20 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import type { Request } from "express";
 import { apiToken, childEnv, repoRoot } from "./config.js";
 
-/** Lỗi HTTP có mã - error handler ở index.ts sẽ trả { error: { code, message } } */
+/**
+ * Lỗi HTTP có mã - error handler ở index.ts sẽ trả { error: { code, message } }.
+ *
+ * `extra` = dữ liệu máy đọc được đi KÈM lỗi, nằm ngang hàng `error` trong body
+ * (cùng kiểu `raw` của POST /api/skills/generate): vd 409 VERSION_CONFLICT kèm
+ * `current` để editor hiện bản mới mà không phải gọi thêm một GET, 400
+ * INVALID_TIMELINE kèm `issues` chỉ đích danh từng phần tử hỏng.
+ */
 export class HttpError extends Error {
   constructor(
     public status: number,
     public code: string,
     message: string,
+    public extra?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "HttpError";

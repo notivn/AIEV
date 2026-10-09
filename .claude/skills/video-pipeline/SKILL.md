@@ -39,6 +39,11 @@ How the two engines talk to each other: **intermediate MP4 files** in `video-pro
 ```
 
 - `scenes[]` is the contract between the two engines: a scene with `src` is rendered by HyperFrames; a scene with `srcVideo` is footage used as-is. Remotion reads this file to assemble - **never hardcode the scene list in the Remotion code**.
+- **The user edits `meta.json` too.** The dashboard has a video editor (timeline + live Remotion preview) that writes `scenes`, `audio`, `captions`, `subtitles`, `subtitleStyle` and `overlays` straight into this file - between your turns, or before your session even started. So, every single time:
+  1. **Read `meta.json` again right before you change it** - never trust the copy you read earlier in the session.
+  2. **Edit in place** (the `Edit` tool on the exact keys you are changing). **Never `Write` the whole file back from memory**: that silently throws away whatever the user just dragged, trimmed or retyped.
+  3. **Keep every field you do not recognise**, at any depth (extra keys on a scene, a cue, `audio`...). They belong to the user, the editor or the system.
+  The server snapshots the timeline when your session starts and ends (`video-projects/<id>/.history/`), so the user can always roll back - but a clobbered edit is still lost work for them.
 
 ### 2. Build the scenes (HyperFrames)
 - Copy `assets/brand/brand-tokens.css` into the project, write compositions following the `window.__timelines` convention.

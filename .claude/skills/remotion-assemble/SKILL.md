@@ -116,7 +116,15 @@ When a transition has an overlap, subtract that overlap while accumulating - for
    `durationInFrames` **throws at render time**. This bites hardest on videos with no source footage
    (text-to-video, image-only explainers), where nothing has a natural duration to infer from.
 
-8. **Asset paths**: Remotion code only loads through `staticFile()` - the backend stages assets into `engines/remotion/public/staging/<project>/` (hardlink) and writes the `staging/...` path into `props.resolved.json`; Remotion never reads an absolute path. This runs on Windows - always use `path.join` on the backend, never string concatenation.
+8. **`meta.json` is shared with a human editor.** The dashboard's video editor previews the `Assemble`
+   composition live in the browser (`@remotion/player`) and saves the timeline keys (`scenes`, `audio`,
+   `captions`, `subtitles`, `subtitleStyle`, `overlays`) straight back into `meta.json`. When you assemble
+   or adjust the timeline: **re-read `meta.json` right before each change, change it in place with `Edit`,
+   never `Write` the whole file from memory, and keep every field you do not recognise** (the schema uses
+   `z.looseObject` precisely so extra fields survive). Paths stay relative to the project folder with no
+   `..` - the editor's server-side validator rejects anything else, and so does staging.
+
+9. **Asset paths**: Remotion code only loads through `staticFile()` - the backend stages assets into `engines/remotion/public/staging/<project>/` (hardlink) and writes the `staging/...` path into `props.resolved.json`; Remotion never reads an absolute path. This runs on Windows - always use `path.join` on the backend, never string concatenation.
 
 ## Draft vs Final
 

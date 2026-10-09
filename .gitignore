@@ -6,6 +6,10 @@ dist/
 # Project video/ảnh của người dùng — không đẩy lên repo
 video-projects/*
 !video-projects/.gitkeep
+# Lịch sử phiên bản timeline của trình chỉnh sửa (tới 100 bản/project). Ghi
+# riêng ra dù đã nằm trong video-projects/*: ai đó mở lại một project mẫu bằng
+# dấu "!" thì lịch sử vẫn không bị kéo theo lên repo.
+video-projects/*/.history/
 image-projects/
 /auto-cut/
 # Dấu / đầu là BẮT BUỘC: không có nó thì mẫu này khớp luôn

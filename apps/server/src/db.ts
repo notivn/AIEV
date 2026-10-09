@@ -298,6 +298,21 @@ export function hasActiveJobForProject(projectId: string): boolean {
   return row !== undefined;
 }
 
+/**
+ * Project đang có job RENDER (scene-draft/final, assemble-draft/final) chạy hoặc chờ? - trình chỉnh
+ * sửa báo "bản đang render sẽ không có thay đổi mới". Khác hasActiveJobForProject:
+ * job auto-trim không render gì từ timeline nên không tính.
+ */
+export function hasActiveRenderJobForProject(projectId: string): boolean {
+  const row = db
+    .prepare(
+      "SELECT 1 FROM jobs WHERE projectId = ? AND status IN ('running', 'queued') " +
+        "AND type IN ('scene-draft', 'scene-final', 'assemble-draft', 'assemble-final') LIMIT 1",
+    )
+    .get(projectId);
+  return row !== undefined;
+}
+
 export function countQueuedJobs(): number {
   const row = db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE status = 'queued'").get() as {
     n: number;

@@ -6,6 +6,7 @@ import * as db from "./db.js";
 import { broadcast } from "./events.js";
 import { normOutput, readMeta } from "./meta.js";
 import { readRenderSettings } from "./renderSettings.js";
+import { agentRunStarted, agentRunFinished } from "./timeline.js";
 
 /**
  * Chạy Claude Code headless qua Claude Agent SDK (0.3.x).
@@ -353,6 +354,17 @@ export async function runAgent(
   running.set(sessionId, q);
   interruptedSessions.delete(sessionId);
   db.setChatSessionStatus(sessionId, "running");
+
+  // Lịch sử timeline (docs/EDITOR-PLAN.md 2.4): chụp "ai-before" lúc phiên gắn
+  // project BẮT ĐẦU để người dùng luôn quay lại được trạng thái trước khi AI sửa.
+  // Chụp NGAY SAU running.set: từ đây trình chỉnh sửa bị khóa ghi (AGENT_BUSY),
+  // nên giữa ảnh chụp và lúc agent bắt tay sửa không còn ai chen vào meta.json.
+  // Đọc meta + băm vài KB - rẻ; hai hàm hook tự nuốt lỗi, không bao giờ làm hỏng lượt chạy.
+  const snapshotProjectId = session?.projectId ?? null;
+  const snapshotLabel = session?.title ?? null;
+  const versionAtStart = snapshotProjectId
+    ? agentRunStarted(snapshotProjectId, snapshotLabel)
+    : null;
   let textBuffer = "";
   let resultSaved = false;
   let hadError = false;
@@ -441,6 +453,9 @@ export async function runAgent(
     });
   } finally {
     running.delete(sessionId);
+    // Timeline đổi trong lượt này → chụp "ai-after" (cùng bản đã ghi đĩa). Đặt
+    // ĐẦU finally: nhánh gate goal='final' bên dưới có thể return sớm.
+    if (snapshotProjectId) agentRunFinished(snapshotProjectId, versionAtStart, snapshotLabel);
     // Trạng thái cuối bền vững - UI tắt/mở lại vẫn đọc được qua GET sessions
     const userInterrupted = interruptedSessions.has(sessionId);
     let status: db.ChatSessionStatus = userInterrupted
