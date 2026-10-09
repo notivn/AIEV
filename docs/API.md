@@ -302,8 +302,13 @@ atmosphere thoáng cho thẻ key/phụ đề đè lên). Server tự chèn quy t
 agent KHÔNG tự tả vị trí chủ thể trong prompt.
 
 Chi tiết kỹ thuật (đã verify 2026-07-29):
-- Claude models cho edit/chat (options.model của Agent SDK): "claude-fable-5" (mặc định),
-  "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5". SDK cũng nhận options.effort
+- Claude models cho edit/chat (options.model của Agent SDK): "claude-sonnet-5-5" (mặc định),
+  "claude-fable-5-1", "claude-opus-5-5", "claude-haiku-5-5" và các thế hệ trước.
+  GET /api/providers/claude/models: có ANTHROPIC_API_KEY thì lấy live từ Models API
+  (source "anthropic"); đăng nhập gói Claude thì hỏi Agent SDK `supportedModels()` theo
+  tài khoản đang dùng (source "claude-code", cache 6h); không được nữa thì danh sách tĩnh
+  (source "static"). Model mới chỉ hiện qua SDK khi đã nâng @anthropic-ai/claude-agent-sdk.
+  SDK cũng nhận options.effort
   ("low"|"medium"|"high"|"xhigh") — expose thành "mode" trên UI: Nhanh(low)/Chuẩn(medium)/Sâu(high).
   chat_sessions thêm cột model TEXT, effort TEXT.
 - Gemini tạo ảnh: POST https://generativelanguage.googleapis.com/v1/models/gemini-3.1-flash-image:generateContent

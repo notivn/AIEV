@@ -1497,8 +1497,11 @@ export const getGeminiImageModels = () =>
 
 /** Kết quả GET /api/providers/claude/models. */
 export interface ClaudeModels {
-  /** anthropic = danh sách live từ Models API; static = fallback (chỉ OAuth / lỗi mạng). */
-  source: "anthropic" | "static";
+  /**
+   * anthropic = live từ Models API (có API key); claude-code = Agent SDK báo theo
+   * tài khoản gói Claude đang đăng nhập; static = danh sách viết sẵn (fallback).
+   */
+  source: "anthropic" | "claude-code" | "static";
   models: ProviderModel[];
 }
 

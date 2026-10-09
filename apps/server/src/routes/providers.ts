@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import { Router } from "express";
-import { hasClaudeAuth } from "../config.js";
+import { hasClaudeAuth, repoRoot } from "../config.js";
 import { geminiApiKey } from "../gemini.js";
 import { HttpError } from "../util.js";
 
@@ -11,19 +12,24 @@ import { HttpError } from "../util.js";
  */
 
 /**
- * Danh sách tĩnh ĐẦY ĐỦ model Claude đang khả dụng (sắp mới → cũ) - fallback khi
- * không có ANTHROPIC_API_KEY (OAuth subscription không gọi được Models API) hoặc
- * fetch lỗi. Các model 3.7/3.5 đã retired (404) nên không liệt kê.
+ * Danh sách tĩnh ĐẦY ĐỦ model Claude đang khả dụng (sắp mới → cũ) - lớp cuối
+ * cùng khi không hỏi được ai khác: không có ANTHROPIC_API_KEY (Models API) VÀ
+ * Agent SDK cũng không trả lời được. Các model 3.7/3.5 đã retired (404) nên
+ * không liệt kê. Ra model mới thì thêm lên ĐẦU danh sách.
  */
 export const CLAUDE_MODELS = [
-  { id: "claude-fable-5", label: "Fable 5 (mạnh nhất)" },
+  { id: "claude-fable-5-1", label: "Fable 5.1 (mạnh nhất)" },
+  { id: "claude-opus-5-5", label: "Opus 5.5" },
+  { id: "claude-sonnet-5-5", label: "Sonnet 5.5 (cân bằng)" },
+  { id: "claude-haiku-5-5", label: "Haiku 5.5 (nhanh)" },
+  { id: "claude-fable-5", label: "Fable 5" },
   { id: "claude-opus-5", label: "Opus 5" },
-  { id: "claude-sonnet-5", label: "Sonnet 5 (cân bằng)" },
+  { id: "claude-sonnet-5", label: "Sonnet 5" },
   { id: "claude-opus-4-8", label: "Opus 4.8" },
   { id: "claude-opus-4-7", label: "Opus 4.7" },
   { id: "claude-opus-4-6", label: "Opus 4.6" },
   { id: "claude-sonnet-4-6", label: "Sonnet 4.6" },
-  { id: "claude-haiku-4-5", label: "Haiku 4.5 (nhanh)" },
+  { id: "claude-haiku-4-5", label: "Haiku 4.5" },
   { id: "claude-opus-4-5", label: "Opus 4.5" },
   { id: "claude-sonnet-4-5", label: "Sonnet 4.5" },
   { id: "claude-opus-4-1", label: "Opus 4.1" },
@@ -99,19 +105,102 @@ let liveClaudeModelsCache: { at: number; list: Array<{ id: string; label: string
   null;
 const CLAUDE_MODELS_CACHE_MS = 10 * 60 * 1000;
 
+/** Bỏ đuôi ngày ("claude-haiku-4-5-20251001" → "claude-haiku-4-5") để so với danh sách tĩnh */
+function baseModelId(id: string): string {
+  return id.replace(/-\d{8}$/, "");
+}
+
+// Cache model do Agent SDK báo về - 6 giờ: chỉ đổi khi nâng SDK/đổi gói, mà mỗi
+// lần hỏi phải khởi động cả tiến trình Claude Code (~15s)
+let sdkClaudeModelsCache: { at: number; list: Array<{ id: string; label: string }> } | null =
+  null;
+let sdkClaudeModelsInflight: Promise<Array<{ id: string; label: string }> | null> | null = null;
+const SDK_MODELS_CACHE_MS = 6 * 60 * 60 * 1000;
+const SDK_MODELS_TIMEOUT_MS = 45_000;
+
+/**
+ * Hỏi Claude Code (qua Agent SDK) những model mà TÀI KHOẢN ĐANG ĐĂNG NHẬP dùng
+ * được - đường duy nhất cho người dùng gói Claude (OAuth), vì Models API đòi
+ * ANTHROPIC_API_KEY. Trước đây nhánh này rơi thẳng về danh sách tĩnh, nên mỗi
+ * lần Anthropic ra model mới là ô "AI thực hiện" đứng yên ở thế hệ cũ cho tới
+ * khi có người sửa tay code.
+ *
+ * SDK trả về alias (default/opus/sonnet/haiku/fable) kèm `resolvedModel` là id
+ * thật; lấy id thật, gộp lên ĐẦU danh sách tĩnh (model mới nhất đứng trước),
+ * bỏ trùng. Hỏng gì (chưa đăng nhập, timeout, SDK đổi API) → null, dùng tĩnh.
+ */
+async function fetchSdkClaudeModels(): Promise<Array<{ id: string; label: string }> | null> {
+  if (sdkClaudeModelsCache && Date.now() - sdkClaudeModelsCache.at < SDK_MODELS_CACHE_MS) {
+    return sdkClaudeModelsCache.list;
+  }
+  if (sdkClaudeModelsInflight) return sdkClaudeModelsInflight;
+  sdkClaudeModelsInflight = (async () => {
+    const abortController = new AbortController();
+    // Prompt không gửi gì: chỉ cần tiến trình khởi động để hỏi danh sách. Kết thúc
+    // khi abort để generator không treo lại trong bộ nhớ sau mỗi lần hỏi.
+    async function* idle(): AsyncGenerator<never> {
+      await new Promise<void>((resolve) =>
+        abortController.signal.addEventListener("abort", () => resolve(), { once: true }),
+      );
+    }
+    let q: ReturnType<typeof query> | null = null;
+    let timer: NodeJS.Timeout | null = null;
+    try {
+      q = query({
+        prompt: idle(),
+        options: { cwd: repoRoot, abortController } as Parameters<typeof query>[0]["options"],
+      });
+      const found = await Promise.race([
+        q.supportedModels(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("timeout")), SDK_MODELS_TIMEOUT_MS);
+        }),
+      ]);
+      const fresh: Array<{ id: string; label: string }> = [];
+      for (const m of found) {
+        const id = m.resolvedModel ? baseModelId(m.resolvedModel) : "";
+        if (!/^claude-[a-z0-9][a-z0-9.-]*$/i.test(id) || fresh.some((f) => f.id === id)) continue;
+        const known = CLAUDE_MODELS.find((s) => s.id === id);
+        // Nhãn tĩnh nếu đã biết; model mới thì lấy tên trong mô tả ("Opus 5.5 · ...")
+        fresh.push({ id, label: known?.label ?? (m.description.split("·")[0].trim() || id) });
+      }
+      if (fresh.length === 0) return null;
+      const list = [...fresh, ...CLAUDE_MODELS.filter((s) => !fresh.some((f) => f.id === s.id))];
+      sdkClaudeModelsCache = { at: Date.now(), list };
+      return list;
+    } catch {
+      return null;
+    } finally {
+      if (timer) clearTimeout(timer);
+      // Đóng hẳn tiến trình Claude Code vừa mở - không để nó chạy ngầm
+      try {
+        q?.close();
+      } catch {
+        /* đã đóng */
+      }
+      abortController.abort();
+      sdkClaudeModelsInflight = null;
+    }
+  })();
+  return sdkClaudeModelsInflight;
+}
+
 /**
  * Lấy danh sách model Claude MỚI NHẤT từ Anthropic Models API
  * (GET https://api.anthropic.com/v1/models, header x-api-key + anthropic-version: 2023-06-01,
  * phân trang after_id/has_more, mỗi model có id + display_name).
- * Chỉ gọi được với ANTHROPIC_API_KEY - OAuth subscription hoặc lỗi mạng
- * → fallback danh sách tĩnh CLAUDE_MODELS.
+ * Chỉ gọi được với ANTHROPIC_API_KEY. Không có key (gói Claude/OAuth) → hỏi
+ * Agent SDK; vẫn không được → danh sách tĩnh CLAUDE_MODELS.
  */
 async function fetchLiveClaudeModels(): Promise<{
-  source: "anthropic" | "static";
+  source: "anthropic" | "claude-code" | "static";
   models: Array<{ id: string; label: string }>;
 }> {
   const key = process.env.ANTHROPIC_API_KEY;
-  if (!key) return { source: "static", models: CLAUDE_MODELS };
+  if (!key) {
+    const viaSdk = await fetchSdkClaudeModels();
+    return viaSdk ? { source: "claude-code", models: viaSdk } : { source: "static", models: CLAUDE_MODELS };
+  }
   if (liveClaudeModelsCache && Date.now() - liveClaudeModelsCache.at < CLAUDE_MODELS_CACHE_MS) {
     return { source: "anthropic", models: liveClaudeModelsCache.list };
   }
@@ -155,6 +244,7 @@ async function fetchLiveClaudeModels(): Promise<{
 function isValidClaudeModel(id: string): boolean {
   if (CLAUDE_MODEL_IDS.includes(id)) return true;
   if (liveClaudeModelsCache?.list.some((m) => m.id === id)) return true;
+  if (sdkClaudeModelsCache?.list.some((m) => m.id === id)) return true;
   return /^claude-[a-z0-9][a-z0-9.-]*$/i.test(id);
 }
 
@@ -234,7 +324,8 @@ router.get("/", (_req, res) => {
     connected: hasClaudeAuth(),
     source: claudeSource(),
     roles: ["edit", "chat"],
-    models: CLAUDE_MODELS,
+    // Danh sách SDK đã hỏi được thì dùng luôn (mới hơn danh sách tĩnh)
+    models: sdkClaudeModelsCache?.list ?? CLAUDE_MODELS,
   };
 
   const gKey = geminiApiKey();
@@ -259,7 +350,8 @@ router.get("/gemini/image-models", async (_req, res) => {
   res.json(await fetchLiveImageModels());
 });
 
-// GET /api/providers/claude/models - danh sách model Claude MỚI NHẤT (live từ Anthropic, cache 10')
+// GET /api/providers/claude/models - danh sách model Claude MỚI NHẤT
+// (API key: live từ Anthropic, cache 10'; gói Claude: hỏi Agent SDK, cache 6h)
 router.get("/claude/models", async (_req, res) => {
   res.json(await fetchLiveClaudeModels());
 });

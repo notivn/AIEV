@@ -29,22 +29,26 @@ import { useT } from "@/lib/i18n";
 /**
  * Model mặc định cho phiên AI mới.
  *
- * SONNET 5 CHỨ KHÔNG PHẢI MODEL MẠNH NHẤT - đây là quyết định về TIỀN, đo trên
+ * SONNET CHỨ KHÔNG PHẢI MODEL MẠNH NHẤT - đây là quyết định về TIỀN, đo trên
  * dữ liệu thật của dự án chứ không phải cảm tính:
  *
  * - Dựng một video tiêu khoảng 24,6 triệu token VÀO và 0,08 triệu token RA.
  *   Tỉ lệ 300:1, nên gần như toàn bộ chi phí nằm ở giá token vào; giá token ra
  *   gần như không ảnh hưởng gì.
- * - Giá token vào: Fable 5 $10, Opus 5 $5, Sonnet 5 $3, Haiku 4.5 $1 mỗi triệu.
- * - Quy ra mỗi video (sau prompt cache): Fable 5 ~$50, Opus 5 ~$25,
- *   Sonnet 5 ~$15.
+ * - Giá token vào: Fable 5.1 $10, Opus 5.5 $4, Sonnet 5.5 $2, Haiku 5.5 $0,10
+ *   mỗi triệu.
+ * - Quy ra mỗi video (sau prompt cache): Fable 5.1 ~$50, Opus 5.5 ~$20,
+ *   Sonnet 5.5 ~$10.
+ *
+ * Ra thế hệ mới thì đổi sang Sonnet MỚI NHẤT (cùng giá, giỏi hơn) - để mặc định
+ * ở thế hệ cũ là người dùng không bao giờ được dùng model mới trừ khi tự đổi.
  *
  * Trước đây mặc định là Fable 5 - model đắt nhất - nên mỗi video tốn gấp hơn ba
  * lần mức cần thiết cho công việc dựng video vốn đã có skill hướng dẫn từng
  * bước. Người dùng vẫn chọn được model mạnh hơn trong ô ngay cạnh; đây chỉ là
  * điểm khởi đầu hợp lý, không phải giới hạn.
  */
-export const DEFAULT_MODEL = "claude-sonnet-5";
+export const DEFAULT_MODEL = "claude-sonnet-5-5";
 export const DEFAULT_EFFORT: AgentEffort = "medium";
 
 export const EFFORT_OPTIONS: {
@@ -64,7 +68,7 @@ export const EFFORT_OPTIONS: {
  * nên đổi model mặc định mà quên chỗ này là ô select hiện sai tên model, người
  * dùng tưởng đang chạy model khác hẳn với thứ thật sự được gọi.
  */
-const FALLBACK_MODELS = [{ id: DEFAULT_MODEL, label: "Claude Sonnet 5" }];
+const FALLBACK_MODELS = [{ id: DEFAULT_MODEL, label: "Claude Sonnet 5.5" }];
 
 // KEY dictionary - dịch bằng t() lúc render
 const GEMINI_TOOLTIP = "model.gemini-tooltip";

@@ -34,6 +34,12 @@ export interface ModelPrice {
  */
 export const MODEL_PRICES: Record<string, ModelPrice> = {
   // ----- Anthropic -----
+  "claude-fable-5-1": { inPerM: 10, outPerM: 50 },
+  "claude-opus-5-5": { inPerM: 4, outPerM: 20 },
+  "claude-sonnet-5-5": { inPerM: 2, outPerM: 10 },
+  // Giá cho prompt tới 100K token; dài hơn là 0.5/2.5 - bảng này chỉ giữ một
+  // mức nên lấy mức thường gặp, số tiền thật vẫn lấy từ costUsd của SDK
+  "claude-haiku-5-5": { inPerM: 0.1, outPerM: 0.5 },
   "claude-fable-5": { inPerM: 10, outPerM: 50 },
   "claude-mythos-5": { inPerM: 10, outPerM: 50 },
   "claude-opus-5": { inPerM: 5, outPerM: 25 },

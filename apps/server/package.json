@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.220",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.295",
     "@mozilla/readability": "^0.6.0",
     "better-sqlite3": "^13.0.2",
     "dotenv": "^17.2.0",
