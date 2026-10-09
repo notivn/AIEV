@@ -295,7 +295,7 @@ async function stepCut(ctx: JobCtx, id: string): Promise<void> {
         // User đặt key chung cho cả loạt thì tôn trọng, để trống thì lấy tiêu đề đoạn
         mainKey: sessionBrief.mainKey.trim() || seg.title,
         // Hướng dẫn bắt buộc về file đã cắt sẵn phải đứng TRƯỚC, ghi chú của user nối sau
-        notes: [childNotes(seg, fileName, target, layout), sessionBrief.notes.trim()]
+        notes: [childNotes(seg, fileName, target, layout, sessionBrief.autoCut), sessionBrief.notes.trim()]
           .filter(Boolean)
           .join("\n\n"),
       },
@@ -463,6 +463,7 @@ function childNotes(
   fileName: string,
   target: { width: number; height: number },
   layout: ReframeLayout,
+  autoCut: boolean,
 ): string {
   const lines = [
     "## Đoạn cắt tự động (Auto cut videos)",
@@ -474,7 +475,13 @@ function childNotes(
       layout === "crop" ? "cúp bám chủ thể, chủ thể đã ở giữa khung" : "thu nhỏ giữ trọn hình + nền lấp"
     }) - không cần crop/scale lại.`,
     "- `assets/transcript.json` là transcript RIÊNG của đoạn này, mốc giây đã quy về 0 " +
-      "(0 = đầu video ngắn) - dùng thẳng cho phụ đề/karaoke, không phải trừ gì thêm.",
+      "(0 = đầu video ngắn)" +
+      // Brief con thừa hưởng công tắc autoCut của phiên: BẬT thì bước cắt khoảng
+      // lặng dời mốc thời gian, nói "dùng thẳng" là mâu thuẫn với chính brief đó
+      (autoCut
+        ? " - đây là bản GỐC trước bước tự động cắt; cắt xong thì phụ đề/karaoke phải theo " +
+          "`assets/transcript.cut.json` như mục Tự động cắt hướng dẫn."
+        : " - dùng thẳng cho phụ đề/karaoke, không phải trừ gì thêm."),
     `- Đây là video NGẮN (${target.width}x${target.height}): nhịp nhanh, chữ to, mọi thông tin nằm trong vùng an toàn.`,
   ];
   if (seg.hook) lines.push(`- Mở đầu video là hook: "${seg.hook}".`);

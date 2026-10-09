@@ -360,10 +360,14 @@ export function buildEditPrompt(input: {
         "áp cho mọi scene HyperFrames, mọi ảnh minh họa và mọi chuyển cảnh.",
     );
     lines.push(`- Dựng cảnh và chuyển động: ${videoStyle.motion}`);
-    lines.push(
-      "- Server đã tự trộn chỉ đạo mỹ thuật của phong cách này vào prompt ảnh minh họa; " +
-        "KHÔNG cần (và không được) tự mô tả lại phong cách trong prompt ảnh - chỉ mô tả NỘI DUNG cần vẽ.",
-    );
+    // Chỉ nhắc ảnh minh họa khi công tắc ảnh BẬT - nhắc lúc tắt là mở lại đúng
+    // con đường mà dòng "Ảnh minh họa AI: TẮT" vừa cấm
+    if (brief.autoIllustrations) {
+      lines.push(
+        "- Server đã tự trộn chỉ đạo mỹ thuật của phong cách này vào prompt ảnh minh họa; " +
+          "KHÔNG cần (và không được) tự mô tả lại phong cách trong prompt ảnh - chỉ mô tả NỘI DUNG cần vẽ.",
+      );
+    }
     if (videoStyle.palette === "loose") {
       lines.push(
         "- LƯU Ý MÀU: phong cách này có bảng màu riêng của nó, nên ảnh minh họa sẽ KHÔNG bám sát " +
@@ -391,6 +395,15 @@ export function buildEditPrompt(input: {
         "dựng lại chứ đừng báo hoàn thành.",
     );
     lines.push("");
+  } else {
+    // Công tắc TẮT phải được NÓI RA (CLAUDE.md 5.7): meta.json có thể còn sót
+    // videoStyleId từ lần bật trước, im lặng là agent đọc nó rồi làm theo
+    lines.push(
+      "## PHONG CÁCH DỰNG: TẮT\n" +
+        "Không áp phong cách dựng nào - BỎ QUA `brief.videoStyleId` trong meta.json (nếu có). " +
+        "Dựng theo đúng skill + Style Design.",
+    );
+    lines.push("");
   }
 
   // --- Assets + mô tả từng file
@@ -408,14 +421,21 @@ export function buildEditPrompt(input: {
     );
 
     // --- Chỉnh màu đã được người dùng DUYỆT trước trên UI - áp đúng, không tự sáng tạo
-    const graded = assets.filter((f) => f.colorGrade);
+    // colorGrade null + colorAdjust (chỉ kéo thanh trượt, không chọn preset) là
+    // lựa chọn hợp lệ mà route grade lưu được - lọc theo preset là làm rơi mất nó
+    const graded = assets
+      .map((f) => ({
+        f,
+        chain: buildFilterChain(f.colorGrade ?? null, false, normAdjust(f.colorAdjust)),
+      }))
+      .filter((g): g is { f: (typeof assets)[number]; chain: string } => !!g.chain);
     if (graded.length > 0) {
       lines.push("");
       lines.push("### Chỉnh màu (người dùng đã duyệt preview - áp CHÍNH XÁC như sau)");
-      for (const f of graded) {
-        const chain = buildFilterChain(f.colorGrade ?? null, false, normAdjust(f.colorAdjust));
+      for (const { f, chain } of graded) {
+        const what = f.colorGrade ? `preset "${f.colorGrade}"` : "chỉnh tay (không preset)";
         lines.push(
-          `- \`${f.relPath}\`: preset "${f.colorGrade}" - áp bằng ffmpeg với \`-vf "${chain}"\` ` +
+          `- \`${f.relPath}\`: ${what} - áp bằng ffmpeg với \`-vf "${chain}"\` ` +
             "(nếu footage là HDR/HLG thì chèn tonemap TRƯỚC chuỗi này - xem skill color-grading). " +
             "Tạo bản đã chỉnh màu rồi dùng bản đó trong toàn bộ pipeline thay bản gốc.",
         );

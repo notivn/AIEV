@@ -154,7 +154,10 @@ async function build(ctx: JobCtx, meta: TextToVideoMeta): Promise<void> {
   const projectMeta = readMeta(summary.id);
   projectMeta.audio = {
     ...(projectMeta.audio ?? { voice: null, sfx: [] }),
-    voice: `video-projects/${summary.id}/assets/voice.wav`,
+    // Tính từ thư mục PROJECT (assemble.ts stage() nối với projectDir) - viết
+    // từ repo root là thành video-projects/<id>/video-projects/<id>/... và mọi
+    // job lắp ráp chết vì "Thiếu asset"
+    voice: "assets/voice.wav",
   };
   // Liên kết NGƯỢC về phiên Text to video. Không có nó thì nhìn danh sách
   // Videos Project chỉ thấy một project lạ mọc ra, không biết từ đâu.
