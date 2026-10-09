@@ -45,6 +45,7 @@ import {
   importLibraryFile,
   restoreTimelineRevision,
   saveTimeline,
+  saveTimelineOnLeave,
   startEditorRender,
   timelineConflictOf,
   timelineExportUrl,
@@ -55,7 +56,6 @@ import {
   type Timeline,
   type TimelineIssue,
   type TimelineLock,
-  type TimelinePatch,
   type TimelinePreview,
   type TimelineProject,
 } from "@/lib/api";
@@ -65,7 +65,8 @@ import { useAgentEvents, useEvents, useJobEvents } from "@/lib/useEvents";
 import { EditorChat } from "./EditorChat";
 import { EditorContext, type EditorApi, type EditOptions } from "./EditorContext";
 import { EditorTopBar, type EditorMenuItem, type SaveState } from "./EditorTopBar";
-import { HistoryModal, type RestoreOutcome } from "./HistoryModal";
+import { EditorErrorBoundary } from "./EditorErrorBoundary";
+import { EDITOR_OVERWRITE_LABEL, HistoryModal, type RestoreOutcome } from "./HistoryModal";
 import { Inspector, type InspectorActions } from "./Inspector";
 import { dropTracksOf, type DropTarget, type LibraryItem } from "./library";
 import { LibraryPanel, libraryItemKey } from "./LibraryPanel";
@@ -80,6 +81,7 @@ import {
   deleteSelection,
   duplicateSelection,
   isCueSel,
+  moveSceneBy,
   newCueDuration,
   newFootageScene,
   newImageScene,
@@ -95,7 +97,7 @@ import {
 import { createPlaybackStore } from "./playback";
 import { PreviewPlayer, type PlayerRef } from "./PreviewPlayer";
 import { ShortcutsModal } from "./ShortcutsModal";
-import { editorReducer, initialEditorState, isDirty, type SaveProblem } from "./store";
+import { changedKeysPatch, editorReducer, initialEditorState, isDirty, type SaveProblem } from "./store";
 import { TimelinePanel, type AddCueKind } from "./TimelinePanel";
 import { Transport } from "./Transport";
 import { computeSceneSpans, totalFramesOf } from "./timing";
@@ -129,15 +131,8 @@ const isActive = (job: Job): boolean => job.status === "queued" || job.status ==
 
 const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
-/** Toàn bộ 6 khóa - subtitleStyle vắng mặt phải gửi `null` (PUT giữ khóa không gửi). */
-const toPatch = (tl: Timeline): TimelinePatch => ({
-  scenes: tl.scenes,
-  audio: tl.audio,
-  captions: tl.captions,
-  subtitles: tl.subtitles,
-  overlays: tl.overlays,
-  subtitleStyle: tl.subtitleStyle ?? null,
-});
+/** Body PUT = chỉ các khóa đã đổi so với bản đã lưu (xem store.changedKeysPatch). */
+const toPatch = changedKeysPatch;
 
 /** `scenes[2].from` → phần tử tương ứng để chọn khi bấm vào lỗi. */
 function selectionFromIssuePath(path: string, tl: Timeline): Selection | null {
@@ -211,6 +206,8 @@ export function VideoEditor({ projectId }: { projectId: string }) {
   const [exportProblem, setExportProblem] = useState<{ message: string; detail?: string } | null>(null);
 
   const playback = useMemo(() => createPlaybackStore(), []);
+  /** Đang kéo khối trên timeline (TimelinePanel đặt) - xem EditorApi.dragActive */
+  const dragActive = useRef(false);
   const playerRef = useRef<PlayerRef | null>(null);
   const libraryBusyRef = useRef(false);
   const pendingTargetRef = useRef<DropTarget | null>(null);
@@ -218,7 +215,8 @@ export function VideoEditor({ projectId }: { projectId: string }) {
   // Nguồn sự thật ĐỒNG BỘ cho lượt lưu: state của reducer chỉ cập nhật ở lượt
   // render sau, còn hai lượt lưu nối nhau thì cần version mới NGAY.
   const versionRef = useRef<string | null>(null);
-  const savedRevisionRef = useRef(0);
+  /** Object timeline đang nằm trên server ở versionRef (bản sao đồng bộ của state.savedTimeline) */
+  const savedTimelineRef = useRef<Timeline | null>(null);
   const saveCountRef = useRef(0);
   const saveInFlight = useRef<Promise<boolean> | null>(null);
 
@@ -263,11 +261,19 @@ export function VideoEditor({ projectId }: { projectId: string }) {
     [],
   );
 
+  /** Số thứ tự lượt tải - lượt về muộn của một request CŨ hơn thì bỏ */
+  const loadSeqRef = useRef(0);
+
   const load = useCallback(async () => {
     lastFetchAt.current = Date.now();
     const savesBefore = saveCountRef.current;
+    const seq = ++loadSeqRef.current;
     try {
       const res = await getTimeline(projectId);
+      // Hai lượt tải chồng nhau (SSE nối lại + AI ghi file…) có thể về NGƯỢC thứ
+      // tự: bản cũ về sau sẽ đè lên bản mới (lùi project/preview/khóa, thậm chí
+      // nạp timeline cũ). Chỉ lượt gửi SAU CÙNG được áp.
+      if (seq !== loadSeqRef.current) return;
       setLoadError(null);
       // Giữ identity khi không đổi: project/preview đổi là trình phát dựng lại
       setInfo((prev) => {
@@ -289,7 +295,7 @@ export function VideoEditor({ projectId }: { projectId: string }) {
       const incoming = normalizeTimeline(res.timeline);
       if (!s.timeline || (res.version !== versionRef.current && !isDirty(s))) {
         versionRef.current = res.version;
-        savedRevisionRef.current = s.revision;
+        savedTimelineRef.current = incoming;
         dispatch({ type: "loaded", version: res.version, timeline: incoming });
         return;
       }
@@ -298,6 +304,7 @@ export function VideoEditor({ projectId }: { projectId: string }) {
         dispatch({ type: "conflict", current: { version: res.version, timeline: incoming } });
       }
     } catch (err) {
+      if (seq !== loadSeqRef.current) return; // đã có lượt tải mới hơn
       if (stateRef.current.timeline) return; // đang sửa được - lần tải sau sẽ bắt kịp
       setLoadError({
         message: err instanceof ApiError && err.status === 404 ? t("editor.load.not-found") : t("editor.load.error"),
@@ -416,18 +423,22 @@ export function VideoEditor({ projectId }: { projectId: string }) {
     const s = stateRef.current;
     const base = versionRef.current;
     if (!s.timeline || !base) return false;
-    if (s.revision === savedRevisionRef.current) return true;
+    if (s.timeline === savedTimelineRef.current) return true;
     if (s.problem?.kind === "conflict" || readOnlyRef.current) return false;
     const revision = s.revision;
-    const payload = toPatch(s.timeline);
+    const sent = s.timeline;
+    const payload = toPatch(sent, savedTimelineRef.current);
+    // Lượt ghi đè sau "Giữ bản của tôi" mang nhãn riêng → server không gộp
+    // snapshot của nó (= bản của tab khác/AI) vào snapshot tự lưu trước đó
+    const label = s.overwrite ? EDITOR_OVERWRITE_LABEL : SAVE_LABEL;
     dispatch({ type: "saveStart", revision });
     const run = (async () => {
       try {
-        const res = await saveTimeline(projectId, base, payload, SAVE_LABEL);
+        const res = await saveTimeline(projectId, base, payload, label);
         saveCountRef.current += 1;
         versionRef.current = res.version;
-        savedRevisionRef.current = Math.max(savedRevisionRef.current, revision);
-        dispatch({ type: "saveOk", revision, version: res.version });
+        savedTimelineRef.current = sent;
+        dispatch({ type: "saveOk", revision, version: res.version, timeline: sent });
         return true;
       } catch (err) {
         let problem: SaveProblem;
@@ -474,15 +485,133 @@ export function VideoEditor({ projectId }: { projectId: string }) {
     if (!readOnly && problem?.kind === "locked") dispatch({ type: "clearProblem" });
   }, [readOnly, problem]);
 
+  // ---------------------------------------------------------------- rời trình chỉnh sửa
+  //
+  // Tự lưu chạy 700ms sau lần sửa cuối - rời trang trong khoảng đó (bấm "← Project",
+  // menu, link ở thanh bên, đóng tab) thì timer bị hủy cùng component. Nên:
+  // - còn LƯU ĐƯỢC (không xung đột/lỗi/chỉ đọc): lưu nốt ngay lúc rời, không hỏi;
+  // - KHÔNG lưu được: chặn lại hỏi trước khi bỏ thay đổi.
+
+  /** Thay đổi chưa lưu không lưu được (xung đột / dữ liệu lỗi / lỗi lưu / AI đang khóa). */
+  const leaveBlocked = dirty && (readOnly || problem !== null);
+  const leaveBlockedRef = useRef(leaveBlocked);
+  leaveBlockedRef.current = leaveBlocked;
+
+  /**
+   * Lưu nốt lúc rời (đồng bộ, không await - xem saveTimelineOnLeave). Đọc toàn
+   * ref nên gọi được từ cleanup/pagehide. `dryRun` = chỉ hỏi "lúc đóng tab có
+   * lưu chắc được không" (cho beforeunload).
+   */
+  const flushOnLeave = useCallback(
+    (dryRun = false): "clean" | "sent" | "unsafe" => {
+      const s = stateRef.current;
+      const base = versionRef.current;
+      if (!s.timeline || s.timeline === savedTimelineRef.current) return "clean";
+      if (!base || readOnlyRef.current || s.problem !== null) return "unsafe";
+      const sent = s.timeline;
+      const res = saveTimelineOnLeave(
+        projectId,
+        base,
+        toPatch(sent, savedTimelineRef.current),
+        s.overwrite ? EDITOR_OVERWRITE_LABEL : SAVE_LABEL,
+        { dryRun },
+      );
+      if (dryRun) return res.keepalive && !saveInFlight.current ? "sent" : "unsafe";
+      // Trang còn sống (chuyển trang trong app, hoặc bfcache đưa trang quay lại):
+      // nhận kết quả như một lượt lưu thường để version không lệch
+      const done = (res.promise ?? Promise.reject(new Error("no request")))
+        .then(async (r) => {
+          if (!r.ok) return false;
+          const body = (await r.json()) as { version?: string };
+          if (typeof body.version !== "string") return false;
+          saveCountRef.current += 1;
+          versionRef.current = body.version;
+          savedTimelineRef.current = sent;
+          dispatch({ type: "saveOk", revision: s.revision, version: body.version, timeline: sent });
+          return true;
+        })
+        .catch(() => false);
+      saveInFlight.current = done;
+      void done.finally(() => {
+        if (saveInFlight.current === done) saveInFlight.current = null;
+      });
+      return "sent";
+    },
+    [projectId],
+  );
+  const flushOnLeaveRef = useRef(flushOnLeave);
+  flushOnLeaveRef.current = flushOnLeave;
+
   useEffect(() => {
-    if (!dirty && state.savingRevision === null) return;
+    // Đóng tab / tải lại / rời sang trang ngoài app: không còn React để chờ - bắn
+    // một request keepalive
+    const onPageHide = () => void flushOnLeaveRef.current();
+    // Chỉ HỎI khi lúc đóng tab không lưu chắc được (lỗi lưu, xung đột, đang có
+    // lượt lưu dở, bản quá lớn cho keepalive) - còn lại pagehide tự lưu
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (flushOnLeaveRef.current(true) !== "unsafe") return;
       e.preventDefault();
       e.returnValue = "";
     };
+    window.addEventListener("pagehide", onPageHide);
     window.addEventListener("beforeunload", onBeforeUnload);
-    return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [dirty, state.savingRevision]);
+    return () => {
+      window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      // Unmount = rời trình chỉnh sửa TRONG app (document vẫn sống). Đang có lượt
+      // lưu dở thì đợi nó xong rồi mới lưu phần còn lại - gửi ngay là gửi với
+      // version cũ → tự xung đột với chính mình.
+      const pending = saveInFlight.current;
+      if (pending) void pending.then(() => flushOnLeaveRef.current());
+      else flushOnLeaveRef.current();
+    };
+  }, []);
+
+  /** Đích đang chờ xác nhận "rời trang, bỏ thay đổi" */
+  const [leaveTarget, setLeaveTarget] = useState<string | null>(null);
+  const leaveBypassRef = useRef(false);
+
+  /** Chuyển trang trong app - hỏi trước nếu có thay đổi không lưu được. */
+  const navigate = useCallback(
+    (href: string) => {
+      if (leaveBlockedRef.current && !leaveBypassRef.current) {
+        setLeaveTarget(href);
+        return;
+      }
+      router.push(href);
+    },
+    [router],
+  );
+
+  const confirmLeave = useCallback(() => {
+    const href = leaveTarget;
+    setLeaveTarget(null);
+    if (!href) return;
+    leaveBypassRef.current = true;
+    router.push(href);
+  }, [leaveTarget, router]);
+
+  // Link trong app (nút "← Project", thanh bên của shell, link hàng đợi…) là
+  // <a> của next/link - chặn ở pha CAPTURE của document, trước khi Link kịp
+  // chuyển trang, rồi hỏi bằng modal. Link mở tab mới / tải file / sang trang
+  // ngoài app thì để nguyên (trang này không bị rời, hoặc beforeunload lo).
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      if (!leaveBlockedRef.current || leaveBypassRef.current) return;
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const a = e.target instanceof Element ? e.target.closest("a[href]") : null;
+      if (!(a instanceof HTMLAnchorElement)) return;
+      if ((a.target && a.target !== "_self") || a.hasAttribute("download")) return;
+      const url = new URL(a.href, window.location.href);
+      if (url.origin !== window.location.origin) return;
+      if (url.pathname === window.location.pathname && url.search === window.location.search) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setLeaveTarget(url.pathname + url.search + url.hash);
+    };
+    document.addEventListener("click", onClick, true);
+    return () => document.removeEventListener("click", onClick, true);
+  }, []);
 
   const retrySave = useCallback(() => {
     dispatch({ type: "clearProblem" });
@@ -499,7 +628,7 @@ export function VideoEditor({ projectId }: { projectId: string }) {
     const p = stateRef.current.problem;
     if (p?.kind !== "conflict") return;
     versionRef.current = p.current.version;
-    savedRevisionRef.current = stateRef.current.revision;
+    savedTimelineRef.current = p.current.timeline;
     dispatch({ type: "loaded", version: p.current.version, timeline: p.current.timeline });
   }, []);
 
@@ -507,6 +636,9 @@ export function VideoEditor({ projectId }: { projectId: string }) {
     const p = stateRef.current.problem;
     if (p?.kind !== "conflict") return;
     versionRef.current = p.current.version;
+    // Không bản cục bộ nào còn là "đã lưu" (server đang giữ bản của người kia):
+    // lượt lưu kế chắc chắn chạy và gửi đủ 6 khóa (xem store keepMine)
+    savedTimelineRef.current = null;
     dispatch({ type: "keepMine" });
   }, []);
 
@@ -816,8 +948,9 @@ export function VideoEditor({ projectId }: { projectId: string }) {
         // tải đang bay về (có thể là bản cũ hơn) tự bỏ kết quả và tải lại
         saveCountRef.current += 1;
         versionRef.current = res.version;
-        savedRevisionRef.current = stateRef.current.revision;
-        dispatch({ type: "loaded", version: res.version, timeline: normalizeTimeline(res.timeline) });
+        const restored = normalizeTimeline(res.timeline);
+        savedTimelineRef.current = restored;
+        dispatch({ type: "loaded", version: res.version, timeline: restored });
         // Bản khôi phục có thể tham chiếu file khác - lấy lại thông số xem trước
         requestRefetch();
         setNotice(tf("editor.history.restored", { time: formatDateTime(rev.createdAt) }));
@@ -890,8 +1023,30 @@ export function VideoEditor({ projectId }: { projectId: string }) {
         e.target instanceof HTMLElement &&
         (e.target.tagName === "BUTTON" || e.target.tagName === "A") &&
         !e.target.hasAttribute("data-block");
+      const arrow = key === "ArrowLeft" || key === "ArrowRight";
 
-      if (key === " " && !mod) {
+      // Đang kéo khối trên timeline: phím SỬA bị nuốt - chúng đổi timeline giữa
+      // lượt kéo (xem TimelinePanel: lượt kéo dừng khi timeline đổi từ nơi khác)
+      const editingKey =
+        ((key === "s" || key === "S") && !mod && !e.altKey) ||
+        ((key === "Delete" || key === "Backspace") && !mod) ||
+        (mod && ["d", "D", "z", "Z", "y", "Y"].includes(key)) ||
+        (arrow && e.altKey && !mod);
+      if (editingKey && dragActive.current) {
+        e.preventDefault();
+        return;
+      }
+
+      if (arrow && e.altKey && !mod && !e.shiftKey) {
+        // Alt+←/→: dời scene đang chọn sớm/muộn một vị trí - bàn phím thay cho
+        // kéo-thả đổi thứ tự. Không chọn scene thì để trình duyệt làm việc của
+        // nó (Alt+← = quay lại trang trước)
+        const sel = stateRef.current.selection;
+        if (sel?.kind !== "scene" || readOnlyRef.current) return;
+        e.preventDefault();
+        const id = sel.id;
+        edit((tl) => moveSceneBy(tl, id, key === "ArrowLeft" ? -1 : 1));
+      } else if (key === " " && !mod) {
         if (onButton) return; // Space trên nút = bấm nút đó (bàn phím/a11y)
         e.preventDefault();
         togglePlay();
@@ -931,7 +1086,34 @@ export function VideoEditor({ projectId }: { projectId: string }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [fps, togglePlay, step, seek, splitAction, deleteAction, duplicateAction, undo, redo]);
+  }, [fps, togglePlay, step, seek, splitAction, deleteAction, duplicateAction, undo, redo, edit, dragActive]);
+
+  // ================================================================ thả file từ máy
+
+  // Kéo file từ Explorer/Finder thả vào editor: mặc định trình duyệt MỞ file đó
+  // thay trang (mất trình chỉnh sửa, mất thay đổi chưa lưu). Editor không nhận
+  // upload - chặn hẳn trên cả trang và nhắc đường đúng (trang project → Assets).
+  useEffect(() => {
+    const hasFiles = (e: DragEvent): boolean =>
+      !!e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files");
+    const onDragOver = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
+      flashNotice(t("editor.notice.files-drop"));
+    };
+    const onDrop = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      flashNotice(t("editor.notice.files-drop"));
+    };
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, [flashNotice, t]);
 
   // ================================================================ render
 
@@ -988,6 +1170,14 @@ export function VideoEditor({ projectId }: { projectId: string }) {
   }, []);
 
   const maxTimelineHeight = () => Math.max(TIMELINE_H_MIN, Math.round(window.innerHeight * 0.65));
+  // Giá trị lớn nhất cho aria-valuemax của tay nắm - theo cửa sổ hiện tại
+  const [timelineMaxHeight, setTimelineMaxHeight] = useState(TIMELINE_H_DEFAULT);
+  useEffect(() => {
+    const update = () => setTimelineMaxHeight(maxTimelineHeight());
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
   const persistHeight = (h: number) => {
     try {
       window.localStorage.setItem(TIMELINE_H_KEY, String(Math.round(h)));
@@ -1029,6 +1219,7 @@ export function VideoEditor({ projectId }: { projectId: string }) {
       endCoalesce,
       seek,
       playback,
+      dragActive,
     }),
     [fps, info, opsCtx, readOnly, state.selection, edit, select, endCoalesce, seek, playback],
   );
@@ -1048,10 +1239,12 @@ export function VideoEditor({ projectId }: { projectId: string }) {
         id: "project",
         label: t("editor.menu.project"),
         icon: LayoutDashboard,
-        onSelect: () => router.push(`/projects/${encodeURIComponent(projectId)}`),
+        // Qua navigate: thay đổi không lưu được thì hỏi trước (lưu được thì
+        // cleanup lúc unmount tự lưu nốt)
+        onSelect: () => navigate(`/projects/${encodeURIComponent(projectId)}`),
       },
     ],
-    [t, router, projectId, exportXml],
+    [t, navigate, projectId, exportXml],
   );
 
   const onSessionStarted = useCallback(
@@ -1323,7 +1516,13 @@ export function VideoEditor({ projectId }: { projectId: string }) {
               disabled={timeline.scenes.length === 0}
             />
           </div>
-          <Inspector timeline={timeline} spans={spans} preview={info.preview} actions={inspectorActions} />
+          <EditorErrorBoundary
+            area="inspector"
+            resetKeys={[timeline, state.selection]}
+            className="card editor-inspector flex flex-col gap-3"
+          >
+            <Inspector timeline={timeline} spans={spans} preview={info.preview} actions={inspectorActions} />
+          </EditorErrorBoundary>
         </div>
 
         <div
@@ -1333,6 +1532,8 @@ export function VideoEditor({ projectId }: { projectId: string }) {
           aria-label={t("editor.timeline.resize")}
           aria-valuenow={Math.round(timelineHeight)}
           aria-valuemin={TIMELINE_H_MIN}
+          aria-valuemax={timelineMaxHeight}
+          aria-valuetext={tf("editor.timeline.resize-value", { px: Math.round(timelineHeight) })}
           tabIndex={0}
           onPointerDown={onResizeDown}
           onPointerMove={onResizeMove}
@@ -1350,15 +1551,17 @@ export function VideoEditor({ projectId }: { projectId: string }) {
           }}
         />
 
-        <TimelinePanel
-          timeline={timeline}
-          spans={spans}
-          totalFrames={totalFrames}
-          preview={info.preview}
-          height={timelineHeight}
-          onLibraryDrop={(item, target) => void addLibraryItem(item, target)}
-          onAddCue={addCueAtPlayhead}
-        />
+        <EditorErrorBoundary area="timeline" resetKeys={[timeline]} className="tl p-3" style={{ height: timelineHeight }}>
+          <TimelinePanel
+            timeline={timeline}
+            spans={spans}
+            totalFrames={totalFrames}
+            preview={info.preview}
+            height={timelineHeight}
+            onLibraryDrop={(item, target) => void addLibraryItem(item, target)}
+            onAddCue={addCueAtPlayhead}
+          />
+        </EditorErrorBoundary>
 
         <EditorChat projectId={projectId} onSessionStarted={onSessionStarted} beforeSend={flushSave} />
         <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
@@ -1385,11 +1588,37 @@ export function VideoEditor({ projectId }: { projectId: string }) {
         >
           <p className="text-sm">
             {tf("editor.music.replace-body", {
-              current: (timeline.audio.music?.file ?? "").split("/").pop() ?? "",
+              current: String(timeline.audio.music?.file ?? "").split("/").pop() ?? "",
               next: pendingMusic?.name ?? "",
             })}
           </p>
           <p className="text-meta text-[var(--text-muted)]">{t("editor.music.replace-note")}</p>
+        </Modal>
+        <Modal
+          title={t("editor.leave.title")}
+          open={leaveTarget !== null}
+          onClose={() => setLeaveTarget(null)}
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setLeaveTarget(null)}>
+                {t("editor.leave.stay")}
+              </Button>
+              <Button variant="destructive" onClick={confirmLeave}>
+                {t("editor.leave.discard")}
+              </Button>
+            </>
+          }
+        >
+          <p className="text-sm">
+            {readOnly
+              ? t("editor.leave.body-readonly")
+              : problem?.kind === "conflict"
+                ? t("editor.leave.body-conflict")
+                : problem?.kind === "invalid"
+                  ? t("editor.leave.body-invalid")
+                  : t("editor.leave.body-error")}
+          </p>
+          <p className="text-meta text-[var(--text-muted)]">{t("editor.leave.note")}</p>
         </Modal>
       </div>
     </EditorContext.Provider>

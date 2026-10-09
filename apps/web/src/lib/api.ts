@@ -1816,6 +1816,19 @@ export const revealFile = (relPath: string) =>
  * Xác thực: dashboard đi bằng cookie `aiev_token` (ensureToken đã set trước khi
  * dữ liệu về); trang /m trên điện thoại gắn thêm `?k=` của phiên QR.
  */
+/**
+ * Mã hóa TỪNG đoạn của một đường dẫn tương đối (tên file có dấu cách, `#`,
+ * `?`, `%`, chữ có dấu…) để ghép vào URL `/media/...`. `mediaUrl` cố ý KHÔNG tự
+ * mã hóa: phần lớn nơi gọi nối thêm `?v=` vào sau, và trình phát truyền đường
+ * dẫn đã mã hóa sẵn - mã hóa ở đó là mã hóa hai lần.
+ */
+export const encodeMediaPath = (rel: string): string =>
+  rel
+    .split(/[\\/]+/)
+    .filter((seg) => seg !== "" && seg !== ".")
+    .map(encodeURIComponent)
+    .join("/");
+
 export const mediaUrl = (relPath: string) =>
   withUploadToken(
     `/media/${String(relPath ?? "").replace(/\\/g, "/").replace(/^\/+/, "")}`
@@ -3932,6 +3945,50 @@ export const saveTimeline = (
     timeline,
     ...(label ? { label } : {}),
   });
+
+/**
+ * Body keepalive tối đa mà ta dám gửi: trình duyệt cộng dồn MỌI request
+ * keepalive đang bay và từ chối khi vượt 64KB, nên chừa chỗ cho request khác.
+ */
+const KEEPALIVE_MAX_BYTES = 60_000;
+
+/**
+ * Lưu timeline theo kiểu "bắn rồi thôi" lúc RỜI trình chỉnh sửa (unmount khi
+ * chuyển trang trong app, `pagehide` khi đóng tab/tải lại) - lúc đó không còn
+ * React để nhận kết quả, và `await ensureToken()` có thể không kịp chạy.
+ *
+ * Đồng bộ hoàn toàn: token lấy từ biến đã có (trình chỉnh sửa đã tải timeline
+ * qua request() nên token chắc chắn có rồi) + header `x-aiev-token` y như
+ * request(); cookie `aiev_token` đi kèm theo same-origin như mọi fetch.
+ * `keepalive` để request sống qua lúc trang bị hủy - chỉ bật khi body đủ nhỏ
+ * (giới hạn 64KB của trình duyệt); body lớn hơn vẫn gửi fetch thường: chuyển
+ * trang TRONG app không hủy document nên fetch thường vẫn chạy hết.
+ *
+ * Trả về `keepalive` thực tế để nơi gọi biết lượt đóng tab có được đảm bảo
+ * không (false → nên hỏi người dùng ở beforeunload).
+ */
+export function saveTimelineOnLeave(
+  projectId: string,
+  baseVersion: string,
+  timeline: TimelinePatch,
+  label: string,
+  opts: { dryRun?: boolean } = {},
+): { keepalive: boolean; promise: Promise<Response> | null } {
+  const body = JSON.stringify({ baseVersion, timeline, label });
+  const keepalive = new Blob([body]).size <= KEEPALIVE_MAX_BYTES;
+  if (opts.dryRun) return { keepalive, promise: null };
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (apiToken) headers["x-aiev-token"] = apiToken;
+  const promise = fetch(withUploadToken(`${projectPath(projectId)}/timeline`), {
+    method: "PUT",
+    headers,
+    body,
+    keepalive,
+  });
+  // Không ai chờ kết quả - nuốt lỗi mạng để khỏi "Uncaught (in promise)"
+  promise.catch(() => {});
+  return { keepalive, promise };
+}
 
 /** Lịch sử phiên bản, mới nhất trước (tối đa 100 bản). */
 export const getTimelineRevisions = (projectId: string) =>

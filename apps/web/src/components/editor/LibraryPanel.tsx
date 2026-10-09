@@ -40,6 +40,7 @@ import {
   getLibrarySfx,
   getMediaInfo,
   getProject,
+  encodeMediaPath,
   mediaUrl,
   type FileInfo,
   type LibraryItem as ApiLibraryItem,
@@ -259,7 +260,7 @@ export function LibraryPanel({
             meta: [kindLabel, dur, folder ? `${folder}/` : null, f.description || null]
               .filter(Boolean)
               .join(" · "),
-            audioUrl: kind === "audio" ? mediaUrl(f.relPath) : null,
+            audioUrl: kind === "audio" ? mediaUrl(encodeMediaPath(f.relPath)) : null,
           };
         });
     }
@@ -278,7 +279,9 @@ export function LibraryPanel({
           meta: [fmtDuration(e.durationMs === null ? null : e.durationMs / 1000), e.description ? e.file : null]
             .filter(Boolean)
             .join(" · "),
-          audioUrl: mediaUrl(`assets/${tab === "sfx" ? "sound-effects" : "music"}/${e.file}`),
+          // Tên file thư viện có thể chứa `#`/`?`/`%` - mã hóa từng đoạn, không thì
+          // trình duyệt cắt URL ở `#` và nghe thử báo lỗi
+          audioUrl: mediaUrl(encodeMediaPath(`assets/${tab === "sfx" ? "sound-effects" : "music"}/${e.file}`)),
         };
       });
   }, [tab, assets, sfx, music, q, tag, durations, projectId, t]);

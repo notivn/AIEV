@@ -29,6 +29,13 @@ import {
 import { formatDateTime, formatRelative } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 
+/**
+ * Nhãn lịch sử của lượt lưu "Giữ bản của tôi" (ghi đè bản tab khác/AI). Server
+ * KHÔNG gộp snapshot mang nhãn này (apps/server/src/timeline.ts
+ * EDITOR_OVERWRITE_LABEL) - hai nơi phải cùng một chuỗi.
+ */
+export const EDITOR_OVERWRITE_LABEL = "editor-overwrite";
+
 export type RestoreOutcome =
   | { ok: true }
   | { ok: false; message: string; detail?: string; reload: boolean };
@@ -94,6 +101,9 @@ export function HistoryModal({
         ? tf("editor.history.restored-from", { time: formatDateTime(from.createdAt) })
         : null;
     }
+    // "Giữ bản của tôi": bản này là của tab khác/AI ngay trước khi bị ghi đè -
+    // nói rõ ra, đây chính là bản người dùng sẽ tìm khi ghi đè nhầm
+    if (rev.source === "editor" && rev.label === EDITOR_OVERWRITE_LABEL) return t("editor.history.overwrite-note");
     // Lần lưu tự động của editor luôn mang nhãn kỹ thuật "editor" - không phải ghi chú
     if (rev.source === "editor" && (!rev.label || rev.label === "editor")) return null;
     return rev.label;

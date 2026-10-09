@@ -211,6 +211,18 @@ export function reorderScene(tl: Timeline, from: number, to: number): Timeline {
 }
 
 /**
+ * Dời scene `id` sớm hơn (-1) / muộn hơn (+1) một vị trí - bàn phím thay cho
+ * kéo-thả đổi thứ tự (Alt+←/→). Đã ở đầu/cuối thì trả lại chính timeline.
+ */
+export function moveSceneBy(tl: Timeline, id: string, step: -1 | 1): Timeline {
+  const from = sceneIndexById(tl, id);
+  if (from < 0) return tl;
+  const to = from + step;
+  if (to < 0 || to >= tl.scenes.length) return tl;
+  return reorderScene(tl, from, to);
+}
+
+/**
  * Kéo mép scene `delta` frame. Scene nối tuần tự nên đây là trim "ripple":
  * mọi scene phía sau tự dời theo.
  * - footage: mép đầu đổi `from`, mép cuối đổi `to` (giây, căn lưới frame), kẹp
@@ -304,13 +316,60 @@ export function zoomScaleAt(zoom: TimelineZoom, frame: number): number {
 
 const round4 = (v: number): number => Math.round(v * 1e4) / 1e4;
 
+/** Sai số scale tối đa (tại frame nguyên) khi thay một đoạn ease bằng các mốc tuyến tính. */
+const ZOOM_SAMPLE_TOLERANCE = 0.0015;
+/** Bước lấy mẫu thưa nhất (frame) - đoạn zoom phẳng không cần mốc dày hơn. */
+const ZOOM_SAMPLE_MAX_STEP = 5;
+/** max |ease''(t)| trên [0,1] - dùng để chặn sai số nội suy tuyến tính. */
+const EASE_MAX_CURVATURE: Record<string, number> = { out: 6, inOut: 12 };
+
+/**
+ * Đoạn a→b có ease cong mà điểm cắt rơi VÀO GIỮA: thay đoạn đó bằng các mốc
+ * TUYẾN TÍNH lấy mẫu từ đường cong gốc (gồm cả đúng điểm cắt).
+ *
+ * Vì sao: ease áp cho cả đoạn từ mốc này tới mốc kế. Cắt đôi đoạn rồi để mỗi
+ * nửa tự ease lại là ra HAI đường cong khác hẳn bản gốc - tách scene xong
+ * camera giật/đổi nhịp dù người dùng không đụng gì tới zoom. Tuyến tính từng
+ * khúc thì cắt ở đâu cũng giữ đúng đường.
+ *
+ * Bước lấy mẫu h chọn theo chặn sai số nội suy tuyến tính
+ * |sai số| ≤ h²/8 · max|f''| với f'' = Δscale · ease'' / span², để mọi frame
+ * nguyên lệch ≤ ZOOM_SAMPLE_TOLERANCE (đoạn ngắn/zoom mạnh → mốc từng frame,
+ * khi đó khớp tuyệt đối tại mọi frame nguyên).
+ */
+function linearizeSegmentAt(zoom: TimelineZoom, keys: TimelineZoomKey[], cut: number): TimelineZoomKey[] {
+  const i = keys.findIndex((k, j) => j < keys.length - 1 && k.frame < cut && cut < keys[j + 1].frame);
+  if (i < 0) return keys;
+  const a = keys[i];
+  const b = keys[i + 1];
+  const ease = a.ease ?? "inOut";
+  if (ease === "linear") return keys; // tuyến tính: cắt thẳng đã đúng
+  const span = b.frame - a.frame;
+  const curvature = (EASE_MAX_CURVATURE[ease] ?? EASE_MAX_CURVATURE.inOut) * Math.abs(b.scale - a.scale);
+  let step = ZOOM_SAMPLE_MAX_STEP;
+  while (step > 1 && (step * step * curvature) / (8 * span * span) > ZOOM_SAMPLE_TOLERANCE) step -= 1;
+
+  const frames = new Set<number>([cut]);
+  for (let f = a.frame; f < b.frame; f += step) frames.add(f);
+  const samples: TimelineZoomKey[] = [...frames]
+    .sort((x, y) => x - y)
+    .map((frame) =>
+      // Mốc đầu giữ field lạ của `a`; mọi mốc mẫu đều tuyến tính
+      frame === a.frame
+        ? { ...a, ease: "linear" as const }
+        : { frame, scale: round4(zoomScaleAt(zoom, frame)), ease: "linear" as const },
+    );
+  return [...keys.slice(0, i), ...samples, ...keys.slice(i + 1)];
+}
+
 /** Cắt zoom tại `cut` frame thành hai nửa, mỗi nửa ≥ 2 mốc (schema đòi). */
 function splitZoom(
   zoom: TimelineZoom,
   cut: number,
   secondDuration: number,
 ): [TimelineZoom, TimelineZoom] {
-  const keys = sortKeys(zoom.keys);
+  // Đường cong scale phải giữ nguyên qua điểm cắt (xem linearizeSegmentAt)
+  const keys = linearizeSegmentAt(zoom, sortKeys(zoom.keys), cut);
   const scale = round4(zoomScaleAt(zoom, cut));
   const segment = [...keys].reverse().find((k) => k.frame <= cut);
   const firstKeys: TimelineZoomKey[] = [
@@ -491,8 +550,75 @@ type BaseCue = { from: number; durationInFrames: number };
 
 const cueEnd = (cue: BaseCue): number => cue.from + cue.durationInFrames;
 
+/**
+ * `words` của cue karaoke nếu đúng là mảng, không thì null. meta.json do AI ghi
+ * tay có thể sai kiểu - thao tác nào chạm tới từ thì bỏ qua cue đó thay vì ném
+ * lỗi (ném trong reducer là sập cả trình chỉnh sửa).
+ */
+export const captionWordsOf = (cue: TimelineCaptionCue | undefined): TimelineCaptionWord[] | null =>
+  cue && Array.isArray(cue.words) ? cue.words : null;
+
+/** `parts` của highlight nếu đúng là mảng (xem captionWordsOf). */
+export const highlightPartsOf = (cue: TimelineHighlightCue | undefined): TimelineHighlightPart[] | null =>
+  cue && Array.isArray(cue.parts) ? cue.parts : null;
+
+const isFiniteNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+
+/**
+ * Cue/phần tử có hình dạng editor vẽ & sửa được không - false = dữ liệu lạ
+ * (thường do AI ghi sai kiểu). Timeline vẫn vẽ nó (khối đánh dấu lỗi) và
+ * inspector hiện banner thay vì form; người dùng xóa hoặc nhờ AI sửa.
+ */
+export function isWellFormed(tl: Timeline, sel: Selection): boolean {
+  const timed = (c: { from?: unknown; durationInFrames?: unknown } | undefined | null): boolean =>
+    !!c && typeof c === "object" && isFiniteNum(c.from) && isFiniteNum(c.durationInFrames);
+  switch (sel.kind) {
+    case "caption": {
+      const cue = tl.captions[sel.index];
+      const words = captionWordsOf(cue);
+      return (
+        timed(cue) &&
+        !!words &&
+        words.length > 0 &&
+        words.every(
+          (w) => !!w && typeof w === "object" && typeof w.text === "string" && isFiniteNum(w.start) && isFiniteNum(w.end),
+        )
+      );
+    }
+    case "subtitle": {
+      const cue = tl.subtitles[sel.index];
+      return timed(cue) && typeof cue.text === "string";
+    }
+    case "overlay": {
+      const cue = tl.overlays[sel.index];
+      const parts = highlightPartsOf(cue);
+      return (
+        timed(cue) &&
+        !!parts &&
+        parts.length > 0 &&
+        parts.every((p) => !!p && typeof p === "object" && typeof p.t === "string") &&
+        (cue.kicker === undefined || cue.kicker === null || typeof cue.kicker === "string")
+      );
+    }
+    case "sfx": {
+      const sfx = tl.audio.sfx[sel.index];
+      return !!sfx && typeof sfx === "object" && typeof sfx.file === "string" && isFiniteNum(sfx.atFrame);
+    }
+    case "music": {
+      const music = tl.audio.music;
+      return !!music && typeof music === "object" && typeof music.file === "string";
+    }
+    case "voice":
+      return tl.audio.voice === null || typeof tl.audio.voice === "string";
+    case "scene": {
+      const scene = tl.scenes[sceneIndexById(tl, sel.id)];
+      return !!scene && typeof scene === "object" && typeof scene.id === "string";
+    }
+  }
+}
+
 function shiftWords(cue: TimelineCaptionCue, delta: number): TimelineCaptionCue {
-  if (delta === 0) return cue;
+  if (delta === 0 || !captionWordsOf(cue)) return cue;
   return {
     ...cue,
     words: cue.words.map((w) => ({
@@ -505,6 +631,7 @@ function shiftWords(cue: TimelineCaptionCue, delta: number): TimelineCaptionCue 
 
 /** Kẹp mọi từ vào [from, end] của cue (mép cue vừa đổi). */
 function clampWords(cue: TimelineCaptionCue): TimelineCaptionCue {
+  if (!captionWordsOf(cue)) return cue;
   const lo = cue.from;
   const hi = cueEnd(cue);
   let changed = false;
@@ -637,6 +764,7 @@ export function splitCueAt(tl: Timeline, kind: CueKind, index: number, frame: nu
 
   switch (kind) {
     case "captions": {
+      if (!captionWordsOf(tl.captions[index])) return tl;
       const [a, b] = halves(tl.captions[index]);
       const wordsA = a.words.filter((w) => w.start < at).map((w) => (w.end > at ? { ...w, end: at } : w));
       const wordsB = b.words.filter((w) => w.start >= at);
@@ -687,7 +815,7 @@ export function patchHighlightPart(
   patch: Partial<TimelineHighlightPart>,
 ): Timeline {
   const cue = tl.overlays[cueIndex];
-  const part = cue?.parts[partIndex];
+  const part = highlightPartsOf(cue)?.[partIndex];
   if (!cue || !part) return tl;
   return patchOverlay(tl, cueIndex, {
     parts: replaceAt(cue.parts, partIndex, applyPatch(part, patch)),
@@ -701,7 +829,7 @@ export function insertHighlightPart(
   text: string,
 ): Timeline {
   const cue = tl.overlays[cueIndex];
-  if (!cue || !text) return tl;
+  if (!cue || !text || !highlightPartsOf(cue)) return tl;
   const parts = cue.parts.slice();
   parts.splice(Math.min(parts.length, Math.max(0, afterIndex + 1)), 0, { t: text });
   return patchOverlay(tl, cueIndex, { parts });
@@ -710,7 +838,7 @@ export function insertHighlightPart(
 /** Bỏ một phần chữ - luôn còn ít nhất một phần (schema đòi parts ≥ 1). */
 export function removeHighlightPart(tl: Timeline, cueIndex: number, partIndex: number): Timeline {
   const cue = tl.overlays[cueIndex];
-  if (!cue || cue.parts.length <= 1 || !cue.parts[partIndex]) return tl;
+  if (!cue || !highlightPartsOf(cue) || cue.parts.length <= 1 || !cue.parts[partIndex]) return tl;
   return patchOverlay(tl, cueIndex, { parts: cue.parts.filter((_, i) => i !== partIndex) });
 }
 
@@ -721,7 +849,7 @@ export function patchCaptionWord(
   patch: Partial<TimelineCaptionWord>,
 ): Timeline {
   const cue = tl.captions[cueIndex];
-  const word = cue?.words[wordIndex];
+  const word = captionWordsOf(cue)?.[wordIndex];
   if (!cue || !word) return tl;
   const next = applyPatch(word, patch);
   if (next === word) return tl;
@@ -742,7 +870,7 @@ export function insertCaptionWord(
   text: string,
 ): Timeline {
   const cue = tl.captions[cueIndex];
-  if (!cue || !text) return tl;
+  if (!cue || !text || !captionWordsOf(cue)) return tl;
   const words = cue.words.slice();
   const at = Math.min(words.length, Math.max(0, afterIndex + 1));
   const prev = words[at - 1];
@@ -764,7 +892,7 @@ export function insertCaptionWord(
 /** Bỏ một từ - luôn còn ít nhất một từ (schema đòi words ≥ 1). */
 export function removeCaptionWord(tl: Timeline, cueIndex: number, wordIndex: number): Timeline {
   const cue = tl.captions[cueIndex];
-  if (!cue || cue.words.length <= 1 || !cue.words[wordIndex]) return tl;
+  if (!cue || !captionWordsOf(cue) || cue.words.length <= 1 || !cue.words[wordIndex]) return tl;
   return {
     ...tl,
     captions: replaceAt(tl.captions, cueIndex, {
@@ -909,6 +1037,8 @@ export function deleteSelection(tl: Timeline, sel: Selection | null): Timeline {
 
 export function canDuplicate(tl: Timeline, sel: Selection | null): boolean {
   if (!sel || !selectionExists(tl, sel)) return false;
+  // Nhân bản dữ liệu lỗi chỉ đẻ thêm dữ liệu lỗi (và chặn lưu khóa đó)
+  if (!isWellFormed(tl, sel)) return false;
   return sel.kind !== "music" && sel.kind !== "voice";
 }
 

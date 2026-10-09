@@ -45,7 +45,7 @@ import {
 } from "@engine/manifest";
 import { MediaResolverProvider, type MediaResolver } from "@engine/media";
 import { Banner } from "@/components/Banner";
-import { mediaUrl } from "@/lib/api";
+import { encodeMediaPath, mediaUrl } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import type {
   EditorPreview,
@@ -59,12 +59,7 @@ export type { PlayerRef } from "@remotion/player";
 // ---------------------------------------------------------------- resolver
 
 /** Mã hóa TỪNG đoạn đường dẫn (tên file có dấu cách, `#`, `?`, chữ có dấu…). */
-const encodeSegments = (rel: string): string =>
-  rel
-    .split(/[\\/]+/)
-    .filter((seg) => seg !== "" && seg !== ".")
-    .map(encodeURIComponent)
-    .join("/");
+const encodeSegments = encodeMediaPath;
 
 const FONT_PREFIX = "fonts/";
 

@@ -36,6 +36,12 @@ export interface EditorApi {
   /** Tua tới frame (kẹp trong composition) */
   seek: (frame: number) => void;
   playback: PlaybackStore;
+  /**
+   * true suốt một lượt kéo khối trên timeline (TimelinePanel đặt/xóa). Phím tắt
+   * SỬA (S, Delete, Ctrl+D/Z/Y, Alt+←/→) bị bỏ qua lúc này: chúng đổi timeline
+   * giữa chừng, rồi khung kéo kế tiếp tính lại từ bản lúc bấm chuột sẽ ghi đè mất.
+   */
+  dragActive: { current: boolean };
 }
 
 export const EditorContext = createContext<EditorApi | null>(null);

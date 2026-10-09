@@ -44,6 +44,7 @@ import { fmtNumber, NumberField, ReadOnlyRow, TextField, VolumeField } from "./f
 import {
   footageWindow,
   insertCaptionWord,
+  isWellFormed,
   insertHighlightPart,
   patchCaptionWord,
   patchHighlightPart,
@@ -130,6 +131,17 @@ export function Inspector({
         description={t("editor.inspector.empty")}
       />
     );
+  } else if (!isWellFormed(timeline, selection)) {
+    // Dữ liệu sai kiểu (thường do AI ghi tay meta.json): không dựng form trên
+    // nó - form đọc `.words`/`.parts`/`.text` là sập. Vẫn xóa được (nút thùng
+    // rác ở trên) hoặc nhờ AI sửa.
+    body = (
+      <Banner
+        tone="danger"
+        message={t("editor.malformed.title")}
+        detail={malformedDetail(timeline, selection)}
+      />
+    );
   } else {
     switch (selection.kind) {
       case "scene": {
@@ -211,6 +223,24 @@ export function Inspector({
       </fieldset>
     </section>
   );
+}
+
+/** Nguyên văn phần tử lỗi (rút gọn) cho phần "chi tiết" của banner. */
+function malformedDetail(timeline: Timeline, sel: Selection): string {
+  let raw: unknown;
+  if (sel.kind === "scene") raw = timeline.scenes[sceneIndexById(timeline, sel.id)];
+  else if (sel.kind === "caption") raw = timeline.captions[sel.index];
+  else if (sel.kind === "subtitle") raw = timeline.subtitles[sel.index];
+  else if (sel.kind === "overlay") raw = timeline.overlays[sel.index];
+  else if (sel.kind === "sfx") raw = timeline.audio.sfx[sel.index];
+  else if (sel.kind === "music") raw = timeline.audio.music;
+  else raw = timeline.audio.voice;
+  try {
+    const text = JSON.stringify(raw, null, 2) ?? String(raw);
+    return text.length > 2000 ? `${text.slice(0, 2000)}…` : text;
+  } catch {
+    return String(raw);
+  }
 }
 
 function SelectionActions({
@@ -476,7 +506,7 @@ function PunchInFields({
         <>
           {current.custom && (
             <p className="text-meta text-[var(--text-muted)]">
-              {tf("editor.zoom.custom", { n: scene.zoom?.keys.length ?? 0 })}
+              {tf("editor.zoom.custom", { n: Array.isArray(scene.zoom?.keys) ? scene.zoom.keys.length : 0 })}
             </p>
           )}
           <div className="grid grid-cols-2 gap-3">

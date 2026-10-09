@@ -20,7 +20,7 @@ import {
   Undo2,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Badge, type BadgeTone } from "@/components/Badge";
 import { Button } from "@/components/Button";
 import { IconButton } from "@/components/IconButton";
@@ -200,27 +200,67 @@ export function EditorTopBar({
   );
 }
 
+/**
+ * Menu "Thêm" theo mẫu menu-button của WAI-ARIA: mở ra là focus vào mục đầu,
+ * ↑/↓ (vòng), Home/End để di chuyển, Esc đóng và trả focus về nút mở, Tab
+ * đóng và đi tiếp như thường.
+ */
 function EditorMenu({ items }: { items: EditorMenuItem[] }) {
   const { t } = useT();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const focusTrigger = () =>
+    rootRef.current?.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')?.focus();
+
+  const menuItems = (): HTMLButtonElement[] =>
+    Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? []);
 
   useEffect(() => {
     if (!open) return;
+    // Mở ra là focus mục đầu - bàn phím dùng được ngay, trình đọc màn hình đọc mục
+    menuItems()[0]?.focus();
     const onDown = (e: PointerEvent) => {
       if (e.target instanceof Node && rootRef.current?.contains(e.target)) return;
       setOpen(false);
     };
+    // Bắt ở pha CAPTURE + chặn lan: Esc khi menu đang mở CHỈ đóng menu. Trước đây
+    // listener phím tắt của trang (cũng ở window, đăng ký trước) chạy trước và
+    // bỏ chọn luôn phần tử đang chọn.
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      setOpen(false);
+      focusTrigger();
     };
     window.addEventListener("pointerdown", onDown);
-    window.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     return () => {
       window.removeEventListener("pointerdown", onDown);
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
     };
   }, [open]);
+
+  const onMenuKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    const list = menuItems();
+    if (list.length === 0) return;
+    const i = list.findIndex((el) => el === document.activeElement);
+    let next: number | null = null;
+    if (e.key === "ArrowDown") next = (i + 1) % list.length;
+    else if (e.key === "ArrowUp") next = i <= 0 ? list.length - 1 : i - 1;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = list.length - 1;
+    else if (e.key === "Tab") {
+      setOpen(false);
+      return;
+    }
+    if (next === null) return;
+    // Mũi tên không được lọt ra phím tắt của trang (←/→ tua frame, Home/End tua đầu/cuối)
+    e.preventDefault();
+    e.stopPropagation();
+    list[next].focus();
+  };
 
   if (items.length === 0) return null;
   return (
@@ -230,16 +270,29 @@ function EditorMenu({ items }: { items: EditorMenuItem[] }) {
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown" && !open) {
+            e.preventDefault();
+            setOpen(true);
+          }
+        }}
       >
         <MoreHorizontal size={16} strokeWidth={1.75} />
       </IconButton>
       {open && (
-        <div role="menu" className="editor-menu">
+        <div
+          ref={menuRef}
+          role="menu"
+          aria-label={t("editor.menu")}
+          className="editor-menu"
+          onKeyDown={onMenuKeyDown}
+        >
           {items.map((item) => (
             <button
               key={item.id}
               type="button"
               role="menuitem"
+              tabIndex={-1}
               className="editor-menu-item"
               disabled={item.disabled}
               onClick={() => {

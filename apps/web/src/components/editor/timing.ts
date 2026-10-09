@@ -93,10 +93,15 @@ export function totalFramesOf(spans: SceneSpan[]): number {
  */
 export function contentEndFrame(timeline: Timeline, spans: SceneSpan[]): number {
   let end = totalFramesOf(spans);
+  // Bỏ qua phần tử sai kiểu (AI ghi tay meta.json): một NaN ở đây làm cả
+  // timeline rộng NaN px và biến mất
+  const add = (v: number) => {
+    if (Number.isFinite(v)) end = Math.max(end, v);
+  };
   for (const list of [timeline.captions, timeline.subtitles, timeline.overlays]) {
-    for (const cue of list) end = Math.max(end, cue.from + cue.durationInFrames);
+    for (const cue of list) add(cue?.from + cue?.durationInFrames);
   }
-  for (const sfx of timeline.audio.sfx) end = Math.max(end, sfx.atFrame + 1);
+  for (const sfx of timeline.audio.sfx) add(sfx?.atFrame + 1);
   return end;
 }
 

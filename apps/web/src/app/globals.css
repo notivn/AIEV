@@ -1616,7 +1616,9 @@ textarea.input {
   gap: 8px;
   padding: 8px 12px;
   border-radius: var(--radius);
-  font-size: 13px;
+  /* Nhãn mục menu là NỘI DUNG (text-sm 14px); dòng gợi ý bên dưới tự mang text-meta */
+  font-size: 14px;
+  line-height: 1.45;
   text-align: left;
   color: var(--text);
   cursor: pointer;

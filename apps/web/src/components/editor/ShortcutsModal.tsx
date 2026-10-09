@@ -15,6 +15,7 @@ export function ShortcutsModal({ open, onClose }: { open: boolean; onClose: () =
     { keys: [["←"], ["→"]], label: t("editor.keys.frame") },
     { keys: [["Shift", "←"], ["Shift", "→"]], label: t("editor.keys.second") },
     { keys: [["Home"], ["End"]], label: t("editor.keys.home-end") },
+    { keys: [["Alt", "←"], ["Alt", "→"]], label: t("editor.keys.move-scene") },
     { keys: [["S"]], label: t("editor.keys.split") },
     { keys: [["Delete"], ["Backspace"]], label: t("editor.keys.delete") },
     { keys: [[mod, "D"]], label: t("editor.keys.duplicate") },

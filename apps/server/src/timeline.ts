@@ -606,6 +606,14 @@ const MAX_REVISIONS = 100;
  * nhỏ là việc của undo phía trình duyệt.
  */
 const EDITOR_COALESCE_MS = 10_000;
+/**
+ * Nhãn của lượt "Giữ bản của tôi" (ghi đè bản tab khác/AI vừa lưu). Lượt này
+ * KHÔNG BAO GIỜ gộp: snapshot của nó chính là bản của người kia - thứ duy nhất
+ * cứu được nếu ghi đè nhầm. Nhãn khác "editor" đã tự phá điều kiện gộp với tự
+ * lưu thường, nhưng hai lần ghi đè liên tiếp trong 10s thì cùng nhãn - nên chặn
+ * hẳn ở đây. Web gửi đúng chuỗi này (editor/HistoryModal.tsx EDITOR_OVERWRITE_LABEL).
+ */
+export const EDITOR_OVERWRITE_LABEL = "editor-overwrite";
 
 /**
  * `rev` = thời gian ISO + 4 ký tự ngẫu nhiên, nhưng ":" và "." đổi thành "-":
@@ -714,6 +722,7 @@ export function snapshotTimeline(
       source === "editor" &&
       newest.source === "editor" &&
       newest.label === label &&
+      label !== EDITOR_OVERWRITE_LABEL &&
       Number.isFinite(age) &&
       age >= 0 &&
       age < EDITOR_COALESCE_MS

@@ -54,11 +54,15 @@ import {
 } from "./library";
 import {
   CUE_KIND,
+  captionWordsOf,
+  highlightPartsOf,
   isCueSel,
+  isWellFormed,
   moveCue,
   moveSfx,
   reorderScene,
   resizeCue,
+  sceneIndexById,
   sceneInsertIndexAt,
   sceneKind,
   sceneSourcePath,
@@ -66,6 +70,7 @@ import {
   type Selection,
 } from "./ops";
 import { usePlayheadFrame } from "./playback";
+import { dragOwns, dragStep, type DragSession } from "./store";
 import {
   clampPps,
   contentEndFrame,
@@ -94,13 +99,17 @@ export type AddCueKind = "overlay" | "caption" | "subtitle";
 
 type DragMode = "move" | "trim-start" | "trim-end" | "reorder" | "scrub";
 
-interface DragState {
+interface DragState extends DragSession {
   pointerId: number;
   mode: DragMode;
   target: Selection | null;
   startX: number;
   startScroll: number;
   origin: Timeline;
+  /** Mọi timeline lượt kéo đã đẩy vào store - xem store.ts DragSession */
+  produced: WeakSet<Timeline>;
+  /** Lượt kéo đã bị dừng vì timeline đổi từ nơi khác - không đẩy gì thêm */
+  aborted: boolean;
   started: boolean;
   key: string;
   /** Mép của phần tử lúc bấm (frame) - dùng để hít */
@@ -117,8 +126,15 @@ interface DragView {
   offsetPx: number;
 }
 
-const baseName = (path: string | null | undefined): string =>
-  path ? (path.split(/[\\/]/).pop() ?? path) : "";
+const baseName = (path: unknown): string =>
+  typeof path === "string" && path ? (path.split(/[\\/]/).pop() ?? path) : "";
+
+/** Số hữu hạn hoặc `fallback` - cue/sfx sai kiểu vẫn vẽ được một khối (đánh dấu lỗi). */
+const num = (v: unknown, fallback: number): number =>
+  typeof v === "number" && Number.isFinite(v) ? v : fallback;
+
+/** Chuỗi hoặc "" - nhãn khối không bao giờ ném lỗi vì dữ liệu lạ. */
+const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
 /** pps (px/giây) ↔ vị trí thanh trượt 0..100 theo thang log - zoom đều tay. */
 const ppsToSlider = (pps: number): number =>
@@ -181,6 +197,10 @@ export function TimelinePanel({
   const { t, tf } = useT();
   const editor = useEditor();
   const { fps, readOnly, selection, playback } = editor;
+  // Timeline MỚI NHẤT đã render - khung kéo (requestAnimationFrame) đọc qua ref
+  // để biết có ai sửa chen vào giữa lượt kéo không
+  const timelineRef = useRef(timeline);
+  timelineRef.current = timeline;
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const [pps, setPps] = useState(60);
@@ -350,6 +370,7 @@ export function TimelinePanel({
     const addCues = (kind: "caption" | "subtitle" | "overlay") => {
       timeline[CUE_KIND[kind]].forEach((c, i) => {
         if (sel?.kind === kind && "index" in sel && sel.index === i) return;
+        if (!c || !Number.isFinite(c.from) || !Number.isFinite(c.durationInFrames)) return;
         out.add(c.from);
         out.add(c.from + c.durationInFrames);
       });
@@ -359,7 +380,7 @@ export function TimelinePanel({
     addCues("overlay");
     timeline.audio.sfx.forEach((s, i) => {
       if (sel?.kind === "sfx" && sel.index === i) return;
-      out.add(s.atFrame);
+      if (s && Number.isFinite(s.atFrame)) out.add(s.atFrame);
     });
     return [...out];
   };
@@ -382,25 +403,24 @@ export function TimelinePanel({
     return best ? { delta: delta + best.d, at: best.at } : { delta, at: null };
   };
 
-  /** Thao tác (thuần) ứng với chế độ kéo + độ dời. */
-  const applyDrag = (drag: DragState, delta: number): ((tl: Timeline) => Timeline) | null => {
+  /** Thao tác (thuần) ứng với chế độ kéo + độ dời - luôn tính từ `origin` truyền vào. */
+  const applyDrag = (drag: DragState, delta: number): ((origin: Timeline) => Timeline) | null => {
     const sel = drag.target;
-    const origin = drag.origin;
     if (!sel) return null;
     if (sel.kind === "scene") {
       if (drag.mode === "trim-start" || drag.mode === "trim-end") {
         const edge = drag.mode === "trim-start" ? "start" : "end";
-        return () => trimScene(origin, drag.sceneIndex, edge, delta, editor.ops);
+        return (origin) => trimScene(origin, drag.sceneIndex, edge, delta, editor.ops);
       }
       return null;
     }
     if (isCueSel(sel.kind) && "index" in sel) {
       const kind = CUE_KIND[sel.kind];
-      if (drag.mode === "move") return () => moveCue(origin, kind, sel.index, delta);
-      if (drag.mode === "trim-start") return () => resizeCue(origin, kind, sel.index, "start", delta);
-      if (drag.mode === "trim-end") return () => resizeCue(origin, kind, sel.index, "end", delta);
+      if (drag.mode === "move") return (origin) => moveCue(origin, kind, sel.index, delta);
+      if (drag.mode === "trim-start") return (origin) => resizeCue(origin, kind, sel.index, "start", delta);
+      if (drag.mode === "trim-end") return (origin) => resizeCue(origin, kind, sel.index, "end", delta);
     }
-    if (sel.kind === "sfx" && drag.mode === "move") return () => moveSfx(origin, sel.index, delta);
+    if (sel.kind === "sfx" && drag.mode === "move") return (origin) => moveSfx(origin, sel.index, delta);
     return null;
   };
 
@@ -508,13 +528,13 @@ export function TimelinePanel({
       if (span && mode === "trim-end") edges = [span.end];
     } else if (sel && isCueSel(sel.kind) && "index" in sel) {
       const cue = timeline[CUE_KIND[sel.kind]][sel.index];
-      if (cue) {
+      if (cue && Number.isFinite(cue.from) && Number.isFinite(cue.durationInFrames)) {
         const end = cue.from + cue.durationInFrames;
         edges = mode === "move" ? [cue.from, end] : mode === "trim-start" ? [cue.from] : [end];
       }
     } else if (sel?.kind === "sfx") {
       const sfx = timeline.audio.sfx[sel.index];
-      if (sfx) edges = [sfx.atFrame];
+      if (sfx && Number.isFinite(sfx.atFrame)) edges = [sfx.atFrame];
     }
 
     dragCounter.current += 1;
@@ -525,12 +545,16 @@ export function TimelinePanel({
       startX: e.clientX,
       startScroll: el.scrollLeft,
       origin: timeline,
+      produced: new WeakSet(),
+      aborted: false,
       started: mode === "scrub",
       key: `drag:${dragCounter.current}`,
       edges,
       candidates: snapCandidates(sel, mode, sceneIndex),
       sceneIndex,
     };
+    // Phím tắt sửa (S, Delete, Ctrl+Z…) bị bỏ qua suốt lượt kéo - xem VideoEditor
+    if (mode !== "scrub") editor.dragActive.current = true;
     try {
       el.setPointerCapture(e.pointerId);
     } catch {
@@ -538,10 +562,27 @@ export function TimelinePanel({
     }
   };
 
+  /**
+   * Timeline đã đổi từ nơi khác giữa lượt kéo: DỪNG lượt kéo, giữ nguyên mọi
+   * thứ đang có (kể cả phần đã kéo tới giờ - nó đã là một bước hoàn tác). Con
+   * trỏ vẫn đang giữ thì các lần di tiếp theo bị bỏ qua tới khi nhả chuột.
+   */
+  const abortDrag = (drag: DragState) => {
+    if (drag.aborted) return;
+    drag.aborted = true;
+    pendingRef.current = null;
+    editor.dragActive.current = false;
+    editor.endCoalesce();
+    setDragView(null);
+  };
+
+  /** Timeline đã render gần nhất là thứ lượt kéo "sở hữu" (origin hoặc một bản nó đã đẩy)? */
+  const dragOwnsTimeline = (drag: DragState): boolean => dragOwns(drag, timelineRef.current);
+
   const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
     const el = scrollRef.current;
-    if (!drag || !el || e.pointerId !== drag.pointerId) return;
+    if (!drag || !el || e.pointerId !== drag.pointerId || drag.aborted) return;
 
     if (drag.mode === "scrub") {
       editor.seek(Math.round(frameAtClient(e.clientX)));
@@ -572,6 +613,10 @@ export function TimelinePanel({
       return;
     }
 
+    if (!dragOwnsTimeline(drag)) {
+      abortDrag(drag);
+      return;
+    }
     const snapped = snapDelta(raw, drag.edges, drag.candidates, e.altKey);
     const op = applyDrag(drag, snapped.delta);
     setDragView({
@@ -581,33 +626,56 @@ export function TimelinePanel({
       dropIndex: null,
       offsetPx: 0,
     });
-    if (op) schedule(() => editor.edit(op, { coalesce: drag.key, windowMs: null }));
+    if (op) {
+      schedule(() => {
+        if (drag.aborted) return;
+        // Kiểm lại ngay lúc đẩy (khung hình sau): giữa hai lần thứ khác có thể chen vào
+        if (!dragOwnsTimeline(drag)) {
+          abortDrag(drag);
+          return;
+        }
+        // Store vẫn đang giữ bản của lượt kéo thì thay, khác thì để nguyên (một
+        // lượt sửa khác vừa vào hàng trước lượt này - khung sau sẽ dừng kéo)
+        editor.edit(dragStep(drag, op(drag.origin)), { coalesce: drag.key, windowMs: null });
+      });
+    }
   };
 
   const finishDrag = (e: ReactPointerEvent<HTMLDivElement>, cancelled: boolean) => {
     const drag = dragRef.current;
     if (!drag || e.pointerId !== drag.pointerId) return;
     dragRef.current = null;
+    editor.dragActive.current = false;
     const el = scrollRef.current;
     try {
       el?.releasePointerCapture(e.pointerId);
     } catch {
       // đã nhả
     }
+    if (drag.aborted) {
+      setDragView(null);
+      return;
+    }
     flush();
     if (!cancelled && drag.started && drag.mode === "reorder" && drag.target?.kind === "scene") {
-      const from = drag.sceneIndex;
+      // Đổi thứ tự trên timeline HIỆN TẠI (theo id), không phải origin: thứ gì
+      // chen vào lúc đang kéo (AI thêm scene, nút "+") vẫn còn nguyên
+      const id = drag.target.id;
       const drop = dropIndexAt(frameAtClient(e.clientX));
-      const to = drop > from ? drop - 1 : drop;
-      if (from >= 0 && to !== from) {
-        const origin = drag.origin;
-        editor.edit(() => reorderScene(origin, from, to));
-      }
+      editor.edit((tl) => {
+        const from = sceneIndexById(tl, id);
+        if (from < 0) return tl;
+        return reorderScene(tl, from, drop > from ? drop - 1 : drop);
+      });
     }
     if (cancelled && drag.started && drag.mode !== "reorder" && drag.mode !== "scrub") {
-      // pointercancel (mất con trỏ): trả về đúng trạng thái lúc bấm
+      // pointercancel (mất con trỏ): trả về đúng trạng thái lúc bấm - chỉ khi
+      // timeline vẫn là thứ lượt kéo tạo ra (không thì trả về là xóa thứ chen vào)
       const origin = drag.origin;
-      editor.edit(() => origin, { coalesce: drag.key, windowMs: null });
+      editor.edit((tl) => (dragOwns(drag, tl) ? origin : tl), {
+        coalesce: drag.key,
+        windowMs: null,
+      });
     }
     editor.endCoalesce();
     setDragView(null);
@@ -732,47 +800,67 @@ export function TimelinePanel({
       />
     ));
 
+  // Mọi lần đọc dữ liệu cue đều phòng thủ: meta.json do AI ghi có thể sai kiểu
+  // (`words` là chuỗi, `text` là số…). Một `.map` trên thứ không phải mảng là
+  // sập cả trình chỉnh sửa - ở đây nó chỉ thành một khối đánh dấu lỗi.
   const cueBlocks = (kind: "caption" | "subtitle" | "overlay") =>
     timeline[CUE_KIND[kind]].map((cue, index) => {
       let label: string;
-      if (kind === "caption") label = timeline.captions[index].words.map((w) => w.text).join(" ");
-      else if (kind === "subtitle") label = timeline.subtitles[index].text.replace(/\n+/g, " / ");
-      else {
+      if (kind === "caption") {
+        const words = captionWordsOf(timeline.captions[index]) ?? [];
+        label = words.map((w) => str(w?.text)).join(" ");
+      } else if (kind === "subtitle") {
+        label = str(timeline.subtitles[index]?.text).replace(/\n+/g, " / ");
+      } else {
         const o = timeline.overlays[index];
-        label = `${o.kicker ? `${o.kicker} · ` : ""}${o.parts.map((p) => p.t).join("")}`;
+        const kicker = str(o?.kicker);
+        const parts = highlightPartsOf(o) ?? [];
+        label = `${kicker ? `${kicker} · ` : ""}${parts.map((p) => str(p?.t)).join("")}`;
       }
-      const end = cue.from + cue.durationInFrames;
+      const start = num(cue?.from, 0);
+      const end = start + Math.max(1, num(cue?.durationInFrames, 1));
+      const sel: Selection = { kind, index };
+      const ok = isWellFormed(timeline, sel);
+      const shown = label || (ok ? "" : t("editor.malformed.short"));
       return block({
-        sel: { kind, index },
-        start: cue.from,
+        sel,
+        start,
         end,
-        label,
-        title: `${label} (${secLabel(cue.from)} - ${secLabel(end)})`,
-        resizable: { start: true, end: true },
+        label: shown,
+        title: `${shown} (${secLabel(start)} - ${secLabel(end)})`,
+        // Kéo mép một cue lỗi chỉ đẻ thêm dữ liệu lỗi - vẫn chọn/xóa/dời được
+        resizable: { start: ok, end: ok },
+        invalid: !ok,
       });
     });
 
   const sfxBlocks = timeline.audio.sfx.map((sfx, index) => {
-    const media = preview.media[sfx.file]?.durationSec;
+    const file = str(sfx?.file);
+    const media = file ? preview.media[file]?.durationSec : undefined;
     const lenSec =
-      typeof media === "number" && media > 0 ? Math.max(0.1, media - (sfx.mediaStart ?? 0)) : 1;
-    const name = baseName(sfx.file);
+      typeof media === "number" && media > 0 ? Math.max(0.1, media - num(sfx?.mediaStart, 0)) : 1;
+    const sel: Selection = { kind: "sfx", index };
+    const ok = isWellFormed(timeline, sel);
+    const name = baseName(file) || t("editor.malformed.short");
+    const at = num(sfx?.atFrame, 0);
     return block({
-      sel: { kind: "sfx", index },
-      start: sfx.atFrame,
-      end: sfx.atFrame + Math.max(1, Math.round(lenSec * fps)),
+      sel,
+      start: at,
+      end: at + Math.max(1, Math.round(lenSec * fps)),
       label: name,
-      title: `${name} (${secLabel(sfx.atFrame)})`,
+      title: `${name} (${secLabel(at)})`,
       icon: AudioLines,
       resizable: { start: false, end: false },
+      invalid: !ok,
     });
   });
 
-  const voice = timeline.audio.voice;
+  const voice = typeof timeline.audio.voice === "string" ? timeline.audio.voice : null;
   const voiceSec = voice ? preview.media[voice]?.durationSec : null;
   const voiceEnd =
     typeof voiceSec === "number" && voiceSec > 0 ? Math.round(voiceSec * fps) : totalFrames;
-  const music = timeline.audio.music;
+  const music =
+    timeline.audio.music && typeof timeline.audio.music === "object" ? timeline.audio.music : null;
 
   const tracks: {
     key: TrackKey;
