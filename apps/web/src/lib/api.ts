@@ -748,12 +748,24 @@ export function uploadOrigin(): string {
 export class ApiError extends Error {
   code: string;
   status: number;
+  /**
+   * Field máy đọc được nằm NGANG HÀNG `error` trong body lỗi (vd `current` của
+   * 409 VERSION_CONFLICT, `issues` của 400 INVALID_TIMELINE). Rỗng khi body
+   * không có gì ngoài `error`.
+   */
+  data: Record<string, unknown>;
 
-  constructor(code: string, message: string, status: number) {
+  constructor(
+    code: string,
+    message: string,
+    status: number,
+    data: Record<string, unknown> = {}
+  ) {
     super(message);
     this.name = "ApiError";
     this.code = code;
     this.status = status;
+    this.data = data;
   }
 }
 
@@ -895,18 +907,24 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
   if (!res.ok) {
     let code = String(res.status);
     let message = `Lỗi HTTP ${res.status}`;
+    let data: Record<string, unknown> = {};
     try {
       const body = (await res.json()) as {
         error?: { code: string; message: string };
+        [key: string]: unknown;
       };
       if (body?.error) {
         code = body.error.code;
         message = body.error.message;
       }
+      if (body && typeof body === "object") {
+        const { error: _error, ...rest } = body;
+        data = rest;
+      }
     } catch {
       // body không phải JSON - giữ message mặc định
     }
-    throw new ApiError(code, message, res.status);
+    throw new ApiError(code, message, res.status, data);
   }
   if (res.status === 204) return undefined as T;
   const text = await res.text();
@@ -3666,4 +3684,322 @@ export async function dubPreviewTranslateVideo(
     clipped: res.headers.get("x-dub-clipped") === "1",
     overflowed: res.headers.get("x-dub-overflowed") === "1",
   };
+}
+
+// ============ Trình chỉnh sửa video (timeline - docs/EDITOR-PLAN.md mục 2) ============
+//
+// Kiểu dưới đây bám zod của engines/remotion/src/manifest.ts. Mọi object đều mở
+// `[key: string]: unknown`: meta.json có field lạ do agent/hệ thống ghi thêm, và
+// editor PHẢI giữ nguyên chúng khi gửi lại (sửa trên bản sao, không dựng lại object).
+
+/** Một mốc zoom - `frame` tính TỪ ĐẦU SCENE. */
+export interface TimelineZoomKey {
+  frame: number;
+  scale: number;
+  ease?: "linear" | "out" | "inOut";
+  [key: string]: unknown;
+}
+
+export interface TimelineZoom {
+  origin?: string;
+  keys: TimelineZoomKey[];
+  [key: string]: unknown;
+}
+
+/** Scene - `from`/`to` là GIÂY trong file nguồn; đường dẫn tương đối thư mục project. */
+export interface TimelineScene {
+  id: string;
+  /** Composition HyperFrames (scene render bằng HyperFrames). */
+  src?: string;
+  srcVideo?: string;
+  srcImage?: string | null;
+  render?: string;
+  from?: number;
+  to?: number;
+  durationInFrames?: number;
+  /** Số frame chồng lấn (crossfade) với scene KẾ TIẾP. */
+  transitionOverlap?: number;
+  muted?: boolean;
+  zoom?: TimelineZoom;
+  [key: string]: unknown;
+}
+
+/** Sound effect - `atFrame` là FRAME TUYỆT ĐỐI, `mediaStart` là giây bỏ ở đầu file. */
+export interface TimelineSfx {
+  file: string;
+  atFrame: number;
+  volume?: number;
+  mediaStart?: number;
+  [key: string]: unknown;
+}
+
+/** Nhạc nền auto-ducking - `speech` là các cặp [giâyBắtĐầu, giâyKếtThúc]. */
+export interface TimelineMusic {
+  file: string;
+  volume?: number;
+  duckVolume?: number;
+  speech?: [number, number][];
+  [key: string]: unknown;
+}
+
+export interface TimelineAudio {
+  voice: string | null;
+  sfx: TimelineSfx[];
+  music: TimelineMusic | null;
+  [key: string]: unknown;
+}
+
+/** Một từ karaoke - `start`/`end` là FRAME TUYỆT ĐỐI (không phải giây). */
+export interface TimelineCaptionWord {
+  text: string;
+  start: number;
+  end: number;
+  hi?: boolean;
+  [key: string]: unknown;
+}
+
+export interface TimelineCaptionCue {
+  from: number;
+  durationInFrames: number;
+  words: TimelineCaptionWord[];
+  [key: string]: unknown;
+}
+
+export interface TimelineSubtitleCue {
+  from: number;
+  durationInFrames: number;
+  text: string;
+  [key: string]: unknown;
+}
+
+/** Kiểu phụ đề - mọi field tùy chọn (thiếu = mặc định của SubtitleTrack). */
+export type TimelineSubtitleStyle = Partial<SubtitleStyle> & { [key: string]: unknown };
+
+export interface TimelineHighlightPart {
+  t: string;
+  hi?: boolean;
+  [key: string]: unknown;
+}
+
+export interface TimelineHighlightCue {
+  from: number;
+  durationInFrames: number;
+  kicker?: string;
+  parts: TimelineHighlightPart[];
+  tier?: "main" | "sub";
+  accent?: "hot" | "cool";
+  [key: string]: unknown;
+}
+
+/** Các khóa của meta.json mà trình chỉnh sửa được ghi. */
+export interface Timeline {
+  scenes: TimelineScene[];
+  audio: TimelineAudio;
+  captions: TimelineCaptionCue[];
+  subtitles: TimelineSubtitleCue[];
+  /** Vắng mặt = mặc định; KHÔNG bao giờ null trong bản server trả về. */
+  subtitleStyle?: TimelineSubtitleStyle;
+  overlays: TimelineHighlightCue[];
+}
+
+/**
+ * Body `timeline` của PUT: khóa nào có thì THAY NGUYÊN khóa đó, khóa không gửi
+ * giữ nguyên. `subtitleStyle: null` = xóa kiểu phụ đề (về mặc định).
+ */
+export type TimelinePatch = Partial<Omit<Timeline, "subtitleStyle">> & {
+  subtitleStyle?: TimelineSubtitleStyle | null;
+};
+
+/** Thông số đo bằng ffprobe - width/height vắng mặt với file chỉ có tiếng. */
+export interface TimelineMediaInfo {
+  /** null = file thiếu, ảnh tĩnh, hoặc ffprobe không đọc được. */
+  durationSec: number | null;
+  width?: number;
+  height?: number;
+  hasAudio?: boolean;
+}
+
+export interface TimelinePreview {
+  /** sceneId → file xem trước (final rồi tới .draft.mp4) của scene HyperFrames; null = chưa render. */
+  sceneRenders: Record<string, string | null>;
+  /** Logo Style Design đóng góc - giống jobs/assemble.ts; null = style không có logo. */
+  watermark: { file: string; position: "top-left" } | null;
+  /** relPath (tương đối project) → thông số thật của mọi file timeline tham chiếu. */
+  media: Record<string, TimelineMediaInfo>;
+}
+
+export interface TimelineLock {
+  /** Phiên AI của project đang chạy/chờ tự chạy lại - mọi lệnh ghi trả 409 AGENT_BUSY. */
+  agentBusy: boolean;
+  /** Có job scene/assemble đang chạy hoặc chờ - bản đang render không có thay đổi mới. */
+  renderActive: boolean;
+  sessionId: string | null;
+}
+
+export interface TimelineProject {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+  fps: number;
+  status: ProjectStatus;
+  updatedAt: string | null;
+}
+
+export interface TimelineResponse {
+  version: string;
+  timeline: Timeline;
+  project: TimelineProject;
+  preview: TimelinePreview;
+  lock: TimelineLock;
+}
+
+/** Kết quả PUT / restore - cũng là `current` của 409 VERSION_CONFLICT. */
+export interface TimelineSaved {
+  version: string;
+  timeline: Timeline;
+}
+
+/** Một lỗi validate - `path` kiểu `scenes[2].from` chỉ thẳng phần tử hỏng. */
+export interface TimelineIssue {
+  path: string;
+  message: string;
+}
+
+export type TimelineRevisionSource = "editor" | "ai-before" | "ai-after" | "restore";
+
+export interface TimelineRevision {
+  /** Id bản lịch sử (ISO thời gian đã thay ":" "." bằng "-" + 4 ký tự). */
+  rev: string;
+  createdAt: string;
+  /**
+   * editor: label người dùng gửi kèm PUT (có thể null); ai-before/ai-after: tiêu
+   * đề phiên AI; restore: rev đã được khôi phục. Dữ liệu thô - UI dịch theo `source`.
+   */
+  label: string | null;
+  source: TimelineRevisionSource;
+  version: string;
+}
+
+export type LibraryKind = "sfx" | "music";
+
+export interface LibraryItem {
+  file: string;
+  durationMs: number | null;
+  description: string;
+  tags: string[];
+  /** Luôn true - server chỉ trả file có thật trên đĩa. */
+  available: boolean;
+}
+
+export interface LibraryImportResult {
+  /** Đường dẫn tương đối project để ghi vào timeline, vd "assets/sfx/boom.mp3". */
+  relPath: string;
+  durationSec: number | null;
+  /** false = project đã có đúng file đó, không chép lại. */
+  copied: boolean;
+}
+
+export type EditorRenderQuality = "draft" | "final";
+
+const projectPath = (id: string) => `/api/projects/${encodeURIComponent(id)}`;
+
+export const getTimeline = (projectId: string) =>
+  request<TimelineResponse>(`${projectPath(projectId)}/timeline`);
+
+/**
+ * Lưu timeline. Lỗi đáng xử lý riêng: 409 VERSION_CONFLICT (xem
+ * timelineConflictOf), 409 AGENT_BUSY, 400 INVALID_TIMELINE (timelineIssuesOf).
+ */
+export const saveTimeline = (
+  projectId: string,
+  baseVersion: string,
+  timeline: TimelinePatch,
+  label?: string
+) =>
+  jsonBody<TimelineSaved>(`${projectPath(projectId)}/timeline`, "PUT", {
+    baseVersion,
+    timeline,
+    ...(label ? { label } : {}),
+  });
+
+/** Lịch sử phiên bản, mới nhất trước (tối đa 100 bản). */
+export const getTimelineRevisions = (projectId: string) =>
+  request<TimelineRevision[]>(`${projectPath(projectId)}/timeline/revisions`);
+
+/** Khôi phục một bản lịch sử - cùng các lỗi 409 như saveTimeline. */
+export const restoreTimelineRevision = (
+  projectId: string,
+  rev: string,
+  baseVersion: string
+) =>
+  post<TimelineSaved>(
+    `${projectPath(projectId)}/timeline/revisions/${encodeURIComponent(rev)}/restore`,
+    { baseVersion }
+  );
+
+/** Đo một file trong project (ffprobe, cache theo mtime) - relPath tương đối thư mục project. */
+export const getMediaInfo = (projectId: string, relPath: string) =>
+  request<TimelineMediaInfo>(
+    `${projectPath(projectId)}/media-info?path=${encodeURIComponent(relPath)}`
+  );
+
+export const getLibrarySfx = () => request<LibraryItem[]>("/api/library/sfx");
+
+export const getLibraryMusic = () => request<LibraryItem[]>("/api/library/music");
+
+/** Chép file thư viện chung vào project (Remotion chỉ stage file trong project). */
+export const importLibraryFile = (projectId: string, kind: LibraryKind, file: string) =>
+  post<LibraryImportResult>(`${projectPath(projectId)}/library-import`, { kind, file });
+
+/**
+ * Render từ editor: server xếp scene-draft/scene-final cho scene HyperFrames còn
+ * thiếu file render rồi assemble-*. `force` chỉ bỏ qua cổng QC (như POST /api/jobs).
+ */
+export const startEditorRender = (
+  projectId: string,
+  quality: EditorRenderQuality,
+  opts?: { force?: boolean }
+) =>
+  post<{ jobs: Job[] }>(`${projectPath(projectId)}/editor/render`, {
+    quality,
+    ...(opts?.force ? { force: true } : {}),
+  });
+
+/**
+ * Chat AI từ editor - phiên chat thường (goal null), lượt đầu kèm ngữ cảnh
+ * "đang ở trình chỉnh sửa". `sessionId` phải là phiên chat thường của CHÍNH
+ * project này. 409 SESSION_BUSY khi phiên AI khác của project đang chạy.
+ */
+export const sendEditorChat = (
+  projectId: string,
+  message: string,
+  sessionId?: string,
+  opts?: { model?: string; effort?: AgentEffort }
+) =>
+  post<{ sessionId: string }>(`${projectPath(projectId)}/editor/chat`, {
+    message,
+    ...(sessionId ? { sessionId } : {}),
+    ...(opts?.model ? { model: opts.model } : {}),
+    ...(opts?.effort ? { effort: opts.effort } : {}),
+  });
+
+/**
+ * Link TẢI file FCP7 XML (Premiere Pro / DaVinci Resolve) - dùng cho <a download>,
+ * không qua fetch nên đi bằng cookie `aiev_token` như subtitleDownloadUrl.
+ */
+export const timelineExportUrl = (projectId: string) =>
+  withUploadToken(`${projectPath(projectId)}/timeline/export.xml`);
+
+/** Bản hiện tại trên server khi lưu/khôi phục bị 409 VERSION_CONFLICT - null với lỗi khác. */
+export function timelineConflictOf(err: unknown): TimelineSaved | null {
+  if (!(err instanceof ApiError) || err.code !== "VERSION_CONFLICT") return null;
+  const current = err.data.current as TimelineSaved | undefined;
+  return current && typeof current.version === "string" ? current : null;
+}
+
+/** Danh sách lỗi của 400 INVALID_TIMELINE - [] với lỗi khác. */
+export function timelineIssuesOf(err: unknown): TimelineIssue[] {
+  if (!(err instanceof ApiError) || err.code !== "INVALID_TIMELINE") return [];
+  return Array.isArray(err.data.issues) ? (err.data.issues as TimelineIssue[]) : [];
 }

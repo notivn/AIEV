@@ -43,6 +43,7 @@ import publishRouter from "./routes/publish.js";
 import qcRouter from "./routes/qc.js";
 import clipsRouter from "./routes/clips.js";
 import reviewRouter from "./routes/review.js";
+import timelineRouter, { libraryRouter } from "./routes/timeline.js";
 import autoCutRouter from "./routes/autoCut.js";
 import autoTrimRouter from "./routes/autoTrim.js";
 import textToVideoRouter from "./routes/textToVideo.js";
@@ -125,6 +126,9 @@ function queryString(value: unknown): string {
 function allowedForUploadToken(req: Request): boolean {
   const p = req.path;
   if (req.method === "GET") {
+    // Trừ các đường của trình chỉnh sửa: trang /m không cần tới, mà export.xml
+    // lộ đường dẫn tuyệt đối trên máy chủ, GET timeline có thể chép logo vào project
+    if (/^\/api\/projects\/[^/]+\/(timeline|media-info)(\/|$)/.test(p)) return false;
     return (
       p.startsWith("/media/") ||
       p.startsWith("/api/projects/") ||
@@ -207,6 +211,10 @@ app.use("/api/projects", qcRouter); // QC tự động trên bản draft
 app.use("/api/projects", clipsRouter); // cắt short + tái chế tỉ lệ khung
 app.use("/api/projects", reviewRouter); // ghi chú duyệt draft theo mốc thời gian
 app.use("/api/projects", autoTrimRouter); // cắt khoảng lặng + mỡ thừa của một video project
+// Trình chỉnh sửa video: timeline (meta.json), lịch sử, media-info, render + chat từ editor
+app.use("/api/projects", timelineRouter);
+// Thư viện SFX/nhạc dùng chung cho trình chỉnh sửa (chỉ file có trên đĩa)
+app.use("/api/library", libraryRouter);
 app.use("/api/auto-cut", autoCutRouter);
 // Text to video: phiên nguồn (bài viết/đoạn văn) → tự sinh Videos Project
 app.use("/api/text-to-video", textToVideoRouter);
@@ -274,7 +282,10 @@ app.use("/api", (_req: Request, res: Response) => {
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (res.headersSent) return;
   if (err instanceof HttpError) {
-    res.status(err.status).json({ error: { code: err.code, message: err.message } });
+    // extra trải TRƯỚC để không field nào của nó đè được `error`
+    res
+      .status(err.status)
+      .json({ ...(err.extra ?? {}), error: { code: err.code, message: err.message } });
     return;
   }
   // Lỗi parse JSON body của express.json

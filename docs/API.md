@@ -5,6 +5,8 @@
 ## Quy ước chung
 
 - JSON, UTF-8. Lỗi trả `{ "error": { "code": string, "message": string } }` + HTTP status đúng nghĩa.
+  Vài lỗi kèm thêm field máy đọc được NGANG HÀNG `error` (vd `issues` của 400 INVALID_TIMELINE,
+  `current` của 409 VERSION_CONFLICT) - server ném `HttpError(status, code, message, extra)`.
 - Thời gian: ISO 8601 string. ID job: `job_<nanoid>`. ID chat session: `sess_<nanoid>`.
 - Project ID = tên folder trong `video-projects/` (kebab-case). `meta.json` trên đĩa là nguồn sự thật về project; DB (SQLite) chỉ lưu jobs + chat.
 
@@ -865,6 +867,145 @@ Lưu ở `video-projects/<id>/review.json`. `send` gom các note `open`, soạn 
 dạng `- [mm:ss] (12.4s) nội dung`, bọc trong `<ghi-chu-nguoi-dung>` kèm luật chống prompt injection,
 rồi tiếp tục ĐÚNG phiên edit gần nhất của project (AI còn ngữ cảnh đã dựng) hoặc tạo phiên mới nếu
 chưa có. Phiên đang chạy -> 409 `SESSION_BUSY`.
+
+## Trình chỉnh sửa video (timeline trong dashboard)
+
+Hợp đồng đầy đủ ở `docs/EDITOR-PLAN.md` mục 2. Route: `apps/server/src/routes/timeline.ts`, logic thuần
+(version, validate, lịch sử, FCP7 XML): `apps/server/src/timeline.ts`. `meta.json` vẫn là nguồn sự thật
+DUY NHẤT - không có file timeline song song.
+
+```
+Timeline = { scenes: Scene[], audio: { voice: string|null, sfx: Sfx[], music: Music|null, ... },
+             captions: CaptionCue[], subtitles: SubtitleCue[], subtitleStyle?: SubtitleStyle,
+             overlays: HighlightCue[] }
+           — đúng schema zod ở engines/remotion/src/manifest.ts; mọi object giữ nguyên field lạ.
+             scenes[].from/to = GIÂY trong file nguồn; sfx[].atFrame + mọi cue = FRAME tuyệt đối;
+             music.speech = GIÂY. Đường dẫn media luôn tương đối thư mục project.
+MediaInfo = { durationSec: number|null, width?, height?, hasAudio? }
+           — width/height vắng mặt với file chỉ có tiếng; ảnh tĩnh durationSec null
+Revision  = { rev, createdAt, label: string|null, source: "editor"|"ai-before"|"ai-after"|"restore", version }
+
+GET  /api/projects/:id/timeline
+  → { version, timeline: Timeline,
+      project: { id, name, width, height, fps, status, updatedAt },
+      preview: { sceneRenders: { [sceneId]: relPath|null },     // chỉ scene HyperFrames (có src):
+                                                                 // renders/<id>.mp4 (hoặc scene.render) rồi .draft.mp4
+                 watermark: { file, position: "top-left" } | null, // logo Style Design, giống jobs/assemble.ts
+                 media: { [relPath]: MediaInfo } },              // mọi file timeline tham chiếu (+ file xem trước)
+      lock: { agentBusy, renderActive, sessionId: string|null } }
+
+PUT  /api/projects/:id/timeline   { baseVersion, timeline: Partial<Timeline>, label? }
+  → 200 { version, timeline }
+  → 400 INVALID_BASE_VERSION | INVALID_LABEL
+  → 400 INVALID_TIMELINE + { issues: [{ path, message }] }    // path kiểu "scenes[2].from"
+  → 409 AGENT_BUSY + { sessionId }
+  → 409 VERSION_CONFLICT + { current: { version, timeline } }
+
+GET  /api/projects/:id/timeline/revisions                → Revision[]  (mới nhất trước, tối đa 100)
+POST /api/projects/:id/timeline/revisions/:rev/restore   { baseVersion } → 200 { version, timeline }
+  → 400 INVALID_REV | 404 REVISION_NOT_FOUND | 409 AGENT_BUSY | 409 VERSION_CONFLICT (như PUT)
+
+GET  /api/projects/:id/timeline/export.xml   → FCP7 XML (xmeml v5), attachment "<id>.xml"
+GET  /api/projects/:id/media-info?path=assets/x.mp4   → MediaInfo
+  → 400 PATH_REQUIRED | INVALID_PATH, 404 MEDIA_NOT_FOUND
+
+GET  /api/library/sfx     → [{ file, durationMs, description, tags, available: true }]  (chỉ file có trên đĩa)
+GET  /api/library/music   → như trên, đọc assets/music/library.json
+POST /api/projects/:id/library-import   { kind: "sfx"|"music", file }
+  → 201 { relPath: "assets/sfx/<file>"|"assets/music/<file>", durationSec, copied }
+  → 400 INVALID_KIND | INVALID_FILE, 404 LIBRARY_FILE_NOT_FOUND
+
+POST /api/projects/:id/editor/render   { quality: "draft"|"final", force?: boolean } → 202 { jobs: Job[] }
+  → 400 INVALID_QUALITY | INVALID_FORCE | INVALID_TIMELINE + { issues }
+  → 409 DRAFT_REQUIRED | QC_REQUIRED | QC_FAILED   (luật y hệt POST /api/jobs)
+
+POST /api/projects/:id/editor/chat   { message, sessionId?, model?, effort? } → 202 { sessionId }
+  → 400 MESSAGE_REQUIRED | INVALID_MODEL | INVALID_EFFORT | INVALID_SESSION_ID
+       | SESSION_PROJECT_MISMATCH | SESSION_NOT_EDITOR
+  → 404 SESSION_NOT_FOUND, 409 SESSION_BUSY
+```
+
+**Version & khóa.** `version` = 16 ký tự hex đầu của sha1(`JSON.stringify` object
+`{ scenes, audio, captions, subtitles, subtitleStyle, overlays }` đúng thứ tự đó, khóa thiếu = `null`)
+tính trên giá trị THÔ trong meta.json. Đổi brief/tên/status không đổi version. Mọi lệnh GHI (PUT,
+restore) trả `409 AGENT_BUSY` khi có phiên AI của project đang chạy hoặc đang chờ tự chạy lại; đọc
+vẫn được. Job render đang chạy KHÔNG khóa (assemble chụp meta lúc bắt đầu) - `lock.renderActive` =
+có job `scene-*`/`assemble-*` của project đang chạy hoặc chờ, để UI báo bản đang render không có thay
+đổi mới. Thứ tự kiểm của PUT (sau khi kiểm hình dạng body): 404 → `AGENT_BUSY` → `VERSION_CONFLICT`
+→ `INVALID_TIMELINE` - base đã cũ thì client phải tải lại đằng nào cũng vậy.
+
+**PUT.** Khóa nào có trong `timeline` thì THAY NGUYÊN khóa đó, khóa không gửi giữ nguyên trên đĩa;
+mọi khóa khác của meta.json (`brief`, `status`, `output`, `tags`, field lạ của agent) không bao giờ bị
+đụng. Khóa ngoài 6 khóa trên → issue `timeline.<khóa>`. `subtitleStyle: null` = xóa khóa (về mặc
+định - zod để optional, không nullable). Gửi `timeline: {}` = không ghi gì, trả bản hiện tại. Ghi
+nguyên tử (file tạm + rename, thử lại khi Windows giữ file). `label` tối đa 120 ký tự.
+
+**Validate (tay, bám `manifest.ts` - server không dùng zod).** Chỉ soi các khóa CÓ trong body - meta do
+agent ghi lệch ở khóa khác không khóa chết editor. Luật: `scenes[].id` chuỗi không rỗng, không trùng;
+`from`/`to` số ≥ 0, `to > from`; `durationInFrames` nguyên dương; `transitionOverlap` nguyên ≥ 0;
+`muted` boolean; `zoom.keys` ≥ 2 mốc (`frame` ≥ 0, `scale` > 0, `ease` ∈ linear|out|inOut); mỗi scene có
+ít nhất một nguồn (`src|srcVideo|srcImage|render`) hoặc `durationInFrames`, VÀ phải tính được độ dài
+như engine (`durationInFrames`, hoặc `srcVideo` có đủ `from`+`to`) - thiếu là Remotion ném lỗi lúc
+render. `audio.voice` chuỗi|null; `sfx[]`: `file` không rỗng, `atFrame` nguyên ≥ 0, `volume` 0..1,
+`mediaStart` ≥ 0; `music`: `file`, `volume`/`duckVolume` 0..1, `speech` mảng cặp số. Cue: `from` nguyên
+≥ 0, `durationInFrames` nguyên dương; captions `words` ≥ 1 (`text` không rỗng, `start`/`end` ≥ 0);
+subtitles `text` không rỗng; overlays `parts` ≥ 1 (`t` không rỗng), `tier` ∈ main|sub, `accent` ∈
+hot|cool; `subtitleStyle.backdrop` ∈ blur|solid|none. Đường dẫn media: tương đối, không tuyệt đối
+(posix lẫn `C:\`/`C:foo`/`file://`), không đoạn `..`, không trỏ file/thư mục ẩn, và resolve xong phải
+nằm trong thư mục project (cùng hàng rào với `stage()` của jobs/assemble.ts). Tối đa 200 issue.
+
+**Lịch sử phiên bản** - `video-projects/<id>/.history/<rev>.json` = `{ rev, createdAt, label, source,
+version, timeline }` (timeline thô, khóa thiếu = null). `rev` = thời gian ISO với `:`/`.` đổi thành `-`
+(Windows cấm `:` trong tên file) + 4 ký tự ngẫu nhiên, vd `2026-10-09T12-40-24-833Z-d539`. Giữ 100 bản
+mới nhất. Chụp khi: PUT (bản CŨ, source `editor`, label của body), restore (bản hiện tại trước khi
+khôi phục, source `restore`, label = rev được khôi phục), phiên AI gắn project BẮT ĐẦU (`ai-before`)
+và KẾT THÚC mà version đổi (`ai-after`) - label = tiêu đề phiên. Bỏ qua khi bản mới nhất đã cùng
+version; các lần PUT liên tiếp cùng label trong 10 giây gộp vào bản đầu loạt (tự lưu ~700ms khi kéo
+không được đẩy mất bản "trước khi AI sửa"). Restore thay CẢ 6 khóa (null = xóa khóa) đúng nguyên trạng,
+không validate lại. Chụp hỏng chỉ ghi log - không bao giờ chặn lưu hay làm hỏng lượt chạy AI.
+`.history/` nằm trong `.gitignore` và `/media` không phục vụ dotfile.
+
+**Media info.** ffprobe, cache trong bộ nhớ theo (mtime, size) - file render lại là đo lại. Kích thước
+đã áp cờ xoay (video quay dọc bằng điện thoại, như `probeVideo` của reframe.ts); ảnh bìa nhúng trong
+mp3 không tính là hình. File thiếu trong `preview.media` → `{ durationSec: null }`.
+
+**Library import.** `file` là tên file trần có trong library.json VÀ có trên đĩa (audio). Chép vào
+`assets/sfx/` hoặc `assets/music/` của project (Remotion chỉ stage file trong project). Project đã có
+đúng file đó (so nội dung) → `copied: false`, dùng lại; trùng tên mà khác nội dung → KHÔNG ghi đè, lưu
+thành `<tên>-2.<ext>`, `-3`... và trả `relPath` mới.
+
+**Editor render.** Soi toàn bộ timeline trên đĩa trước (như validate PUT, thêm luật `scenes` ≥ 1), rồi
+luật dùng chung với `POST /api/jobs` (`apps/server/src/jobRules.ts`): final cần assemble-draft thành
+công (`DRAFT_REQUIRED`) + cổng QC (`QC_REQUIRED`/`QC_FAILED`, `force: true` chỉ bỏ qua cổng QC). Xếp
+`scene-draft`/`scene-final` (mỗi scene một job, có `sceneId`) cho scene HyperFrames còn THIẾU file render
+- draft: không có cả bản final lẫn `.draft.mp4` (assemble-draft tự dùng bản final); final: thiếu
+`renders/<id>.mp4` (hoặc `scene.render`) - rồi `assemble-draft`/`assemble-final`. `jobs` theo đúng thứ tự
+xếp; hàng đợi chạy job cùng project tuần tự nên assemble luôn chạy sau các scene của nó.
+
+**Editor chat.** Phiên `goal: null` (KHÔNG phải 'final' → không gate "phải có video final", không
+auto-resume ép render), title `Trình chỉnh sửa: <60 ký tự đầu>` (không bao giờ bắt đầu bằng `Edit: ` -
+db.ts backfill title đó thành goal 'final' mỗi lần khởi động). Lượt đầu kèm khối ngữ cảnh
+(`buildEditorChatPrompt` ở editPrompt.ts): luật an toàn, đơn vị của từng khóa, người dùng đang xem
+trước trực tiếp, LUÔN đọc lại meta.json trước khi sửa + sửa tại chỗ + giữ field lạ, KHÔNG tự render
+draft/final trừ khi được yêu cầu (scene HyperFrames mới/sửa thì xếp `scene-draft` qua `/api/jobs`),
+báo lại ngắn gọn. Lượt sau (gửi kèm `sessionId`) kèm lời nhắc ngắn cùng ý - giữa hai lượt người dùng có
+thể đã sửa tay. `sessionId` phải là phiên của CHÍNH project này (`SESSION_PROJECT_MISMATCH`) và không
+phải phiên dựng video goal 'final' (`SESSION_NOT_EDITOR`). Bất kỳ phiên AI nào của project đang chạy
+hoặc chờ tự chạy lại → 409 `SESSION_BUSY`. model/effort như `/api/chat`.
+
+**Xuất FCP7 XML** (mở được bằng Premiere Pro và DaVinci Resolve). `timebase` = fps làm tròn; `ntsc`
+FALSE với fps nguyên, TRUE chỉ với fps kiểu NTSC (n×1000/1001: 23.976, 29.97, 59.94). Mọi thời gian
+tính bằng frame, vị trí scene tính đúng như engine (`resolveSceneDurationInFrames` + kẹp
+`transitionOverlap` của assemble.ts). Track video: scene footage (`in` = round(from×fps)), bản render
+HyperFrames (file xem trước như `preview.sceneRenders`; chưa render → để trống), ảnh tĩnh; chỗ chồng
+lấn bị cắt thẳng (một track FCP7 không cho clip chồng nhau). Track audio: tiếng gốc của footage (nếu
+không `muted`), voice, sfx (tự dàn ra nhiều track khi chồng nhau, mức âm = `volume`, mặc định 0.3),
+nhạc nền (lặp tới hết video, mức âm = `volume`, bỏ ducking). Đường dẫn `file://` TUYỆT ĐỐI trên máy chạy
+server; file vượt rào bị bỏ qua. Escape XML đầy đủ, mỗi `<file>` định nghĩa một lần rồi tham chiếu id.
+
+**AI biết có trình chỉnh sửa.** `buildEditPrompt` (editPrompt.ts) và skill `video-pipeline`,
+`remotion-assemble` dặn agent: người dùng có thể đã sửa tay meta.json → LUÔN đọc lại ngay trước khi
+sửa, sửa tại chỗ bằng Edit, không Write đè cả file từ trí nhớ, giữ field lạ.
 
 ## Style Design (nhiều bộ nhận diện, tab riêng — THAY THẾ Design System cũ) — assets/styles/styles.json
 
