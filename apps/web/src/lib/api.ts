@@ -3633,7 +3633,7 @@ export async function dubPreviewTranslateVideo(
   };
   return {
     audio: await res.blob(),
-    voice: res.headers.get("x-dub-voice") ?? "",
+    voice: decodeURIComponent(res.headers.get("x-dub-voice") ?? ""),
     naturalSec: num("x-dub-natural"),
     finalSec: num("x-dub-final"),
     sourceSec: num("x-dub-source"),

@@ -290,8 +290,7 @@ router.delete("/:id/font/:slot", (req, res) => {
  * tải về assets/styles/files/, set fontFiles[slot] + fonts[slot] = family.
  */
 router.post("/:id/font-google", async (req, res) => {
-  const data = readStyles();
-  const style = findStyle(data, req.params.id);
+  findStyle(readStyles(), req.params.id); // 404 sớm, trước khi gọi mạng
   const body = (req.body ?? {}) as Record<string, unknown>;
   const slot = body.slot;
   const family = typeof body.family === "string" ? body.family.trim() : "";
@@ -327,7 +326,16 @@ router.post("/:id/font-google", async (req, res) => {
   if (!m) {
     throw new HttpError(502, "GOOGLE_FONTS_ERROR", "Không tìm thấy file font trong phản hồi Google Fonts");
   }
-  const fontRes = await fetch(m[1]);
+  let fontRes: Response;
+  try {
+    fontRes = await fetch(m[1]);
+  } catch (err) {
+    throw new HttpError(
+      502,
+      "GOOGLE_FONTS_ERROR",
+      `Không tải được file font: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
   if (!fontRes.ok) {
     throw new HttpError(502, "GOOGLE_FONTS_ERROR", `Tải file font thất bại (HTTP ${fontRes.status})`);
   }
@@ -337,6 +345,10 @@ router.post("/:id/font-google", async (req, res) => {
   const fileName = `${toKebabAscii(family)}-${weight}.ttf`;
   fs.writeFileSync(path.join(paths.stylesFilesDir, fileName), buf);
 
+  // Đọc lại SAU khi tải: hai lần fetch có thể mất vài giây, ghi bản đọc từ đầu
+  // là xóa mất mọi chỉnh sửa style (màu, font slot kia...) trong lúc chờ
+  const data = readStyles();
+  const style = findStyle(data, req.params.id);
   style.fonts[slot] = family;
   style.fontFiles[slot] = `assets/styles/files/${fileName}`;
   style.updatedAt = nowIso();

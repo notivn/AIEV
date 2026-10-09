@@ -102,6 +102,9 @@ router.post("/:id/thumbnail", async (req, res) => {
   const rendersDir = path.join(projectDir, "renders");
   ensureDir(rendersDir);
   const frameAbs = path.join(rendersDir, "thumb-frame.png");
+  // Xóa frame lần trước: -ss vượt thời lượng thì ffmpeg vẫn thoát 0 mà không ghi
+  // gì, và existsSync bên dưới sẽ đọc trúng frame CŨ thay vì báo lỗi
+  fs.rmSync(frameAbs, { force: true });
   try {
     await execFileCapture(
       "ffmpeg",
@@ -216,12 +219,13 @@ router.post("/:id/thumbnail", async (req, res) => {
       "STILL_FAILED",
       `Remotion still Thumbnail thất bại: ${err instanceof Error ? err.message : String(err)}`,
     );
+  } finally {
+    // Staging chỉ cần trong lúc still - dọn luôn (kể cả khi lỗi), không tích rác
+    fs.rmSync(stagingAbs, { recursive: true, force: true });
   }
   if (!fs.existsSync(outAbs)) {
     throw new HttpError(500, "STILL_FAILED", "Remotion still xong nhưng không thấy thumbnail.png");
   }
-  // Staging chỉ cần trong lúc still - dọn luôn, không tích rác
-  fs.rmSync(stagingAbs, { recursive: true, force: true });
 
   // Chạm updatedAt (writeMeta tự set) để web bust cache thumbnail ?v=updatedAt -
   // không chạm là browser giữ ảnh cũ. Đọc lại meta vì job khác có thể đã ghi trong lúc render.

@@ -88,8 +88,19 @@ router.post("/", async (req, res) => {
     toKebabAscii(typeof body.name === "string" ? body.name : prompt.slice(0, 40)) || "minh-hoa";
   const dir = path.join(paths.videoProjectsDir, projectId, "assets", "illustrations");
   ensureDir(dir);
-  let fileName = `${base}.png`;
-  for (let n = 2; fs.existsSync(path.join(dir, fileName)); n++) fileName = `${base}-${n}.png`;
+  // Giữ chỗ tên file NGAY (mở "wx" là nguyên tử): file thật chỉ xuất hiện sau
+  // khi Gemini vẽ xong, nên chỉ kiểm existsSync thì hai lời gọi song song cùng
+  // tên sẽ cùng nhận x.png và ảnh sau đè ảnh trước
+  let fileName = "";
+  for (let n = 1; ; n++) {
+    fileName = n === 1 ? `${base}.png` : `${base}-${n}.png`;
+    try {
+      fs.closeSync(fs.openSync(path.join(dir, fileName), "wx"));
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
+  }
   const outFile = path.join(dir, fileName);
 
   // Cưỡng chế Style Design: body.styleId → brief.styleId của project → default
@@ -100,26 +111,33 @@ router.post("/", async (req, res) => {
   // phải cùng một ngôn ngữ thị giác, mà agent gọi endpoint này hàng chục lần -
   // chỉ cần một lần nó truyền khác là video có một tấm lạc phong cách.
   const videoStyle = getVideoStyle(activeVideoStyleId(brief));
-  const { promptUsed } = await generateBackground({
-    prompt,
-    kind: "concept",
-    aspect,
-    design,
-    outFile,
-    usageProjectId: projectId,
-    model,
-    allowText,
-    videoStyle,
-    // Ảnh cho VIDEO: chủ thể giữa khung, chừa band trên (key chính) + band dưới
-    // (caption/key liên quan) - dùng bảng Poster là chủ thể bị thẻ key che mất
-    layout: "video",
-    // Vị trí chủ thể: body.position (agent cần bố cục riêng cho một ảnh)
-    // → brief.illustrationPosition (người dùng chọn trên UI) → "auto" (giữa khung)
-    subjectPosition:
-      (body.position as ImageTextPosition | undefined) ??
-      brief.illustrationPosition ??
-      "auto",
-  });
+  let promptUsed: string;
+  try {
+    ({ promptUsed } = await generateBackground({
+      prompt,
+      kind: "concept",
+      aspect,
+      design,
+      outFile,
+      usageProjectId: projectId,
+      model,
+      allowText,
+      videoStyle,
+      // Ảnh cho VIDEO: chủ thể giữa khung, chừa band trên (key chính) + band dưới
+      // (caption/key liên quan) - dùng bảng Poster là chủ thể bị thẻ key che mất
+      layout: "video",
+      // Vị trí chủ thể: body.position (agent cần bố cục riêng cho một ảnh)
+      // → brief.illustrationPosition (người dùng chọn trên UI) → "auto" (giữa khung)
+      subjectPosition:
+        (body.position as ImageTextPosition | undefined) ??
+        brief.illustrationPosition ??
+        "auto",
+    }));
+  } catch (err) {
+    // Vẽ hỏng thì trả lại chỗ đã giữ, không để file rỗng 0 byte trong assets
+    fs.rmSync(outFile, { force: true });
+    throw err;
+  }
 
   // Ghi mô tả vào assets.json để cả UI lẫn các phiên AI sau đều biết ảnh này là gì
   if (description) {

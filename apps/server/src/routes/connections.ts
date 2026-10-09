@@ -182,6 +182,12 @@ router.put("/:provider/key", (req, res) => {
   // Hiệu lực ngay trong process đang chạy - gemini.ts/hasClaudeAuth đọc process.env lúc gọi
   if (trimmed === null) delete process.env[envVar];
   else process.env[envVar] = trimmed;
+  // gemini.ts đọc GOOGLE_API_KEY TRƯỚC GEMINI_API_KEY: còn để nó lại thì key
+  // vừa dán (hoặc lệnh xóa key) không có tác dụng gì mà UI vẫn báo đã lưu
+  if (provider === "gemini") {
+    upsertEnvVar("GOOGLE_API_KEY", null);
+    delete process.env.GOOGLE_API_KEY;
+  }
 
   res.json({ connections: listConnections() });
 });

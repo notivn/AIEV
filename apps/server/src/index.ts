@@ -12,7 +12,8 @@ import {
   repoRoot,
 } from "./config.js";
 import { autoResumeStartup } from "./agent.js";
-import { failStaleRunningJobs } from "./db.js";
+import { scanAutoCuts, patchAutoCut } from "./autoCutMeta.js";
+import { failStaleRunningJobs, hasActiveJobForProject } from "./db.js";
 import { addSseClient } from "./events.js";
 import { HttpError, cookieValue, isLocalRequest, secretEquals } from "./util.js";
 import { isKnownUploadToken } from "./routes/uploadSession.js";
@@ -59,6 +60,18 @@ import mediaRouter from "./routes/media.js";
 ensureBaseDirs();
 // Job còn treo "running" từ lần chạy trước (server bị tắt giữa chừng) → failed
 failStaleRunningJobs();
+// Phiên cắt tự động kẹt "planning"/"cutting" vì job của nó vừa bị đánh failed ở
+// trên: catch của job không bao giờ chạy, nên không ai lùi trạng thái - phiên
+// trả 409 BUSY mãi mãi (kể cả không xóa được). Ghi failed như job tự ghi khi lỗi.
+for (const m of scanAutoCuts()) {
+  if ((m.status === "planning" || m.status === "cutting") && !hasActiveJobForProject(m.id)) {
+    patchAutoCut(m.id, {
+      status: "failed",
+      error: "Server khởi động lại giữa chừng - chạy lại bước này.",
+      failedStep: m.status === "planning" ? "plan" : "cut",
+    });
+  }
+}
 
 const app = express();
 app.disable("x-powered-by");
