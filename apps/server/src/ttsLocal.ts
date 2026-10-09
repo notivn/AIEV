@@ -390,6 +390,9 @@ function startWorker(python: string): ChildProcess {
   stderrTail = [];
   child.stdout?.setEncoding("utf8");
   child.stdout?.on("data", (chunk: string) => {
+    // Worker cũ đang chết dở vẫn có thể xả nốt stdout - không được trộn vào
+    // buffer/pending của worker mới
+    if (worker !== child) return;
     stdoutBuf += chunk;
     // Tách theo dòng: một phản hồi có thể tới làm nhiều mảnh, và nhiều phản hồi
     // có thể dính trong một mảnh.
@@ -411,13 +414,19 @@ function startWorker(python: string): ChildProcess {
       activeLog?.(t);
     }
   });
+  // Chỉ worker HIỆN TẠI được đánh hỏng các yêu cầu đang chờ. Sau timeout/hủy,
+  // stopWorker giết worker cũ (bất đồng bộ - trên Windows qua taskkill) và yêu
+  // cầu kế tiếp đã spawn worker mới; "close" của worker cũ tới muộn mà vẫn
+  // failPending là giết oan yêu cầu của worker mới.
   child.on("error", (err) => {
-    if (worker === child) stopWorker(`không chạy được: ${err.message}`);
+    if (worker !== child) return;
+    stopWorker(`không chạy được: ${err.message}`);
     failPending(new Error(`Không chạy được worker VieNeu: ${err.message}`));
   });
   child.on("close", (code) => {
+    if (worker !== child) return;
     const why = tail(stderrTail.join("\n"), 6);
-    if (worker === child) stopWorker(`tiến trình thoát mã ${code}`);
+    stopWorker(`tiến trình thoát mã ${code}`);
     failPending(
       new Error(
         `Worker VieNeu đã thoát (mã ${code}) khi đang xử lý yêu cầu.` + (why ? `\n${why}` : ""),

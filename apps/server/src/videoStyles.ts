@@ -339,6 +339,21 @@ function seedFile(): VideoStylesFile {
 }
 
 /**
+ * File có mà hỏng (sửa tay gõ sai, ghi dở) thì GIỮ LẠI một bản trước khi gieo
+ * lại - gieo đè thẳng là mất sạch mọi phong cách người dùng đã tạo/sửa.
+ */
+function reseedCorrupt(): VideoStylesFile {
+  const backup = `${videoStylesFile}.corrupt-${Date.now()}`;
+  try {
+    fs.copyFileSync(videoStylesFile, backup);
+    console.warn(`[video-styles] file hỏng - đã lưu bản cũ ở ${backup} rồi gieo lại mặc định`);
+  } catch {
+    /* không chép được thì vẫn phải gieo lại để hệ thống chạy tiếp */
+  }
+  return seedFile();
+}
+
+/**
  * Đọc video-styles.json. Lần đầu chưa có file thì gieo từ BUILTIN_VIDEO_STYLES;
  * file đã có mà repo vừa thêm phong cách mặc định mới thì chèn bổ sung (trừ các
  * id người dùng đã xóa). File hỏng -> gieo lại, vì một danh sách rỗng sẽ làm
@@ -357,11 +372,11 @@ export function readVideoStyles(): VideoStylesFile {
     parsed = JSON.parse(fs.readFileSync(videoStylesFile, "utf8"));
   } catch {
     cache = null;
-    return seedFile();
+    return reseedCorrupt();
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     cache = null;
-    return seedFile();
+    return reseedCorrupt();
   }
   const r = parsed as Record<string, unknown>;
   const styles: VideoStyle[] = [];
@@ -396,7 +411,10 @@ export function readVideoStyles(): VideoStylesFile {
 
 export function writeVideoStyles(data: VideoStylesFile): void {
   ensureDir(videoStylesDir);
-  fs.writeFileSync(videoStylesFile, JSON.stringify(data, null, 2) + "\n", "utf8");
+  // Ghi file tạm rồi rename: tắt máy giữa lúc ghi không để lại JSON cụt
+  const tmp = `${videoStylesFile}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n", "utf8");
+  fs.renameSync(tmp, videoStylesFile);
   const key = cacheKey();
   if (key !== null) cache = { key, data };
 }

@@ -26,6 +26,10 @@ assets/music/*
 !assets/music/library.json
 !assets/music/README.md
 
+# Phong cách dựng: bản sao lưu khi file hỏng + file tạm lúc ghi (videoStyles.ts)
+assets/video-styles/*.corrupt-*
+assets/video-styles/*.tmp
+
 # Sound effect: thư viện đi kèm repo, nhưng KHÔNG kèm 18 file dưới đây.
 #
 # Cả thư viện là đồ sưu tầm nhiều năm từ nhiều nguồn, không ghi lại giấy phép -

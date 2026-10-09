@@ -338,6 +338,9 @@ async function measureLoudness(fileAbs: string): Promise<LoudnormResult> {
     const { out, timedOut } = await runFfmpeg([
       "-i",
       fileAbs,
+      // Chỉ đo tiếng: không -vn thì ffmpeg giải mã cả luồng hình, draft dài/4K
+      // vượt 120s và loudness/true peak ra "không đo được" thay vì số thật
+      "-vn",
       "-af",
       `loudnorm=I=${TARGET_LUFS}:TP=-1:LRA=11:print_format=json`,
       "-f",

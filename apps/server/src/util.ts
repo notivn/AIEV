@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import type { Request } from "express";
 import { apiToken, childEnv, repoRoot } from "./config.js";
 
@@ -188,12 +188,45 @@ export function killTree(child: ChildProcess): void {
       windowsHide: true,
     });
   } else {
-    try {
-      child.kill("SIGKILL");
-    } catch {
-      /* ignore */
+    // child.kill chỉ giết tiến trình trực tiếp (node của remotion/hyperframes);
+    // Chromium + ffmpeg nó đẻ ra sẽ mồ côi và chạy tiếp tới hết render. Gom cả
+    // cây con cháu qua `ps` rồi giết từ lá lên.
+    const pids = [...descendantPids(child.pid), child.pid];
+    for (const pid of pids) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        /* đã chết */
+      }
     }
   }
+}
+
+/** Mọi pid con cháu của `root` (POSIX), con cháu sâu nhất đứng trước */
+function descendantPids(root: number): number[] {
+  let table: string;
+  try {
+    table = execFileSync("ps", ["-A", "-o", "pid=,ppid="], { encoding: "utf8" });
+  } catch {
+    return [];
+  }
+  const children = new Map<number, number[]>();
+  for (const line of table.split("\n")) {
+    const [pid, ppid] = line.trim().split(/\s+/).map(Number);
+    if (!pid || !ppid) continue;
+    const list = children.get(ppid) ?? [];
+    list.push(pid);
+    children.set(ppid, list);
+  }
+  const out: number[] = [];
+  const walk = (pid: number): void => {
+    for (const c of children.get(pid) ?? []) {
+      walk(c);
+      out.push(c);
+    }
+  };
+  walk(root);
+  return out;
 }
 
 /**
