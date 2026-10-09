@@ -187,7 +187,7 @@ export const en: Record<string, string> = {
   "model.gemini-not-connected": "Gemini not connected - only used for Image generation, not for chat/edit.",
   "model.gemini-images-only": "Gemini: images only",
   "model.cost-tip":
-    "For videos that follow a familiar template (TikTok, YouTube - a skill already covers them) Sonnet 5 is enough and about 40% cheaper; for lighter work Haiku 4.5 is about 80% cheaper. Save Opus 5 for hard videos with fiddly requirements. Almost the whole cost of building a video is what the AI reads in, so the input token price is what decides it.",
+    "For videos that follow a familiar template (TikTok, YouTube - a skill already covers them) Sonnet 5.5 is enough at half the price of Opus 5.5; for lighter work Haiku 5.5 is about 97% cheaper. Save Opus 5.5 for hard videos with fiddly requirements. Almost the whole cost of building a video is what the AI reads in, so the input token price is what decides it.",
   "model.aria-model": "AI model for the new session",
   "model.aria-effort": "AI mode for the new session",
   "effort.low": "Fast",
@@ -1509,7 +1509,7 @@ export const en: Record<string, string> = {
 
   "help.model-cost.title": "Why does a cheaper model save so much?",
   "help.model-cost.body":
-    "Measured on this project: for every 1 token the AI writes, it reads about 300 (scripts, files, render logs, frames). So the cost of building a video sits almost entirely on the INPUT side.\nThat makes the input price the thing that decides your bill: Opus 5 $5, Sonnet 5 $3, Haiku 4.5 $1 per million tokens. Switching Opus 5 to Sonnet 5 saves about 40%, to Haiku 4.5 about 80%.\nSonnet 5 is plenty for videos that follow a template a skill already covers: vertical TikTok, landscape YouTube, video translation. Haiku 4.5 suits lighter work: small fixes, subtitle changes, rebuilding a single scene.\nSave Opus 5 for hard videos with fiddly requirements or a lot of judgement calls - that is exactly where a weaker model gets it wrong and the redo costs more than picking Opus in the first place.",
+    "Measured on this project: for every 1 token the AI writes, it reads about 300 (scripts, files, render logs, frames). So the cost of building a video sits almost entirely on the INPUT side.\nThat makes the input price the thing that decides your bill: Opus 5.5 $4, Sonnet 5.5 $2, Haiku 5.5 $0.10 per million tokens. Switching Opus 5.5 to Sonnet 5.5 saves half, to Haiku 5.5 about 97%.\nSonnet 5.5 is plenty for videos that follow a template a skill already covers: vertical TikTok, landscape YouTube, video translation. Haiku 5.5 suits lighter work: small fixes, subtitle changes, rebuilding a single scene.\nSave Opus 5.5 for hard videos with fiddly requirements or a lot of judgement calls - that is exactly where a weaker model gets it wrong and the redo costs more than picking Opus in the first place.",
 
   "help.connections.title": "What is the Connections page for?",
   "help.connections.body":

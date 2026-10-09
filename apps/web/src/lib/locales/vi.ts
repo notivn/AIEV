@@ -187,7 +187,7 @@ export const vi: Record<string, string> = {
   "model.gemini-not-connected": "Gemini chưa kết nối - chỉ dùng cho tính năng Tạo ảnh, không dùng cho chat/edit.",
   "model.gemini-images-only": "Gemini: chỉ Tạo ảnh",
   "model.cost-tip":
-    "Video theo khuôn quen (TikTok, YouTube - đã có skill sẵn) thì Sonnet 5 là đủ và rẻ hơn khoảng 40%; việc nhẹ hơn nữa dùng Haiku 4.5 rẻ hơn khoảng 80%. Để dành Opus 5 cho video khó, nhiều yêu cầu lắt léo. Tiền dựng video gần như nằm hết ở phần AI đọc vào, nên giá token đọc vào của model mới là thứ quyết định.",
+    "Video theo khuôn quen (TikTok, YouTube - đã có skill sẵn) thì Sonnet 5.5 là đủ và rẻ bằng nửa Opus 5.5; việc nhẹ hơn nữa dùng Haiku 5.5 rẻ hơn khoảng 97%. Để dành Opus 5.5 cho video khó, nhiều yêu cầu lắt léo. Tiền dựng video gần như nằm hết ở phần AI đọc vào, nên giá token đọc vào của model mới là thứ quyết định.",
   "model.aria-model": "Model AI cho phiên mới",
   "model.aria-effort": "Chế độ AI cho phiên mới",
   "effort.low": "Nhanh",
@@ -1504,7 +1504,7 @@ export const vi: Record<string, string> = {
 
   "help.model-cost.title": "Vì sao chọn model rẻ lại tiết kiệm nhiều thế?",
   "help.model-cost.body":
-    "Đo trên chính dự án này: cứ 1 token AI viết ra thì có tới khoảng 300 token nó phải đọc vào (kịch bản, file, log render, khung hình). Nên tiền dựng video gần như nằm trọn ở phần ĐỌC VÀO.\nVì thế thứ quyết định hóa đơn là giá token đọc vào của model: Opus 5 $5, Sonnet 5 $3, Haiku 4.5 $1 cho mỗi triệu token. Đổi Opus 5 sang Sonnet 5 tiết kiệm khoảng 40%, sang Haiku 4.5 khoảng 80%.\nSonnet 5 đủ sức cho video theo khuôn đã có skill sẵn: TikTok dọc, YouTube ngang, dịch video. Haiku 4.5 hợp việc nhẹ hơn: sửa vặt, đổi phụ đề, dựng lại một scene.\nĐể dành Opus 5 cho video khó, nhiều yêu cầu lắt léo hoặc phải tự quyết nhiều - đúng chỗ đó thì model yếu hơn làm sai rồi phải làm lại, còn tốn hơn là chọn Opus ngay từ đầu.",
+    "Đo trên chính dự án này: cứ 1 token AI viết ra thì có tới khoảng 300 token nó phải đọc vào (kịch bản, file, log render, khung hình). Nên tiền dựng video gần như nằm trọn ở phần ĐỌC VÀO.\nVì thế thứ quyết định hóa đơn là giá token đọc vào của model: Opus 5.5 $4, Sonnet 5.5 $2, Haiku 5.5 $0,10 cho mỗi triệu token. Đổi Opus 5.5 sang Sonnet 5.5 tiết kiệm một nửa, sang Haiku 5.5 khoảng 97%.\nSonnet 5.5 đủ sức cho video theo khuôn đã có skill sẵn: TikTok dọc, YouTube ngang, dịch video. Haiku 5.5 hợp việc nhẹ hơn: sửa vặt, đổi phụ đề, dựng lại một scene.\nĐể dành Opus 5.5 cho video khó, nhiều yêu cầu lắt léo hoặc phải tự quyết nhiều - đúng chỗ đó thì model yếu hơn làm sai rồi phải làm lại, còn tốn hơn là chọn Opus ngay từ đầu.",
 
   "help.connections.title": "Trang Kết nối để làm gì?",
   "help.connections.body":
