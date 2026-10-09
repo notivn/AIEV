@@ -515,6 +515,8 @@ export default function TextToVideoDetailPage() {
 
   const pending = useRef<Patch>({});
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** PATCH đang bay - flush sau phải chờ nó, kẻo bước kế tiếp chạy trước khi lưu xong */
+  const inflight = useRef<Promise<string | null> | null>(null);
 
   /** Độ dài mong muốn của kịch bản (giây) - "" = để AI tự quyết. */
   const [targetSeconds, setTargetSeconds] = useState("");
@@ -640,20 +642,49 @@ export default function TextToVideoDetailPage() {
 
   // ---- Lưu thay đổi: gộp lại rồi PATCH một lần ----
 
-  const flush = useCallback(async () => {
+  /**
+   * Gửi thay đổi đang chờ. Trả về thông báo lỗi (null = đã lưu / không có gì).
+   * Lưu hỏng thì TRẢ patch về hàng chờ (thay đổi gõ sau thắng) để lần sau gửi
+   * lại, và người gọi phải dừng: chạy "Dựng video" tiếp là dựng kịch bản CŨ trên
+   * server trong khi UI hiện bản đã sửa.
+   */
+  const flush = useCallback(async (): Promise<string | null> => {
     if (flushTimer.current) {
       clearTimeout(flushTimer.current);
       flushTimer.current = null;
     }
-    if (Object.keys(pending.current).length === 0) return;
+    if (inflight.current) {
+      const prevErr = await inflight.current;
+      if (Object.keys(pending.current).length === 0) return prevErr;
+    }
+    if (Object.keys(pending.current).length === 0) return null;
     const patch = pending.current;
     pending.current = {};
+    const run = (async (): Promise<string | null> => {
+      try {
+        const s = await updateTextToVideo(sessionId, patch);
+        setSession(s);
+        setSaveError(null);
+        return null;
+      } catch (e) {
+        const later = pending.current;
+        pending.current = {
+          ...patch,
+          ...later,
+          ...(patch.brief || later.brief
+            ? { brief: { ...(patch.brief ?? {}), ...(later.brief ?? {}) } }
+            : {}),
+        };
+        const msg = e instanceof Error ? e.message : String(e);
+        setSaveError(msg);
+        return msg;
+      }
+    })();
+    inflight.current = run;
     try {
-      const s = await updateTextToVideo(sessionId, patch);
-      setSession(s);
-      setSaveError(null);
-    } catch (e) {
-      setSaveError(e instanceof Error ? e.message : String(e));
+      return await run;
+    } finally {
+      if (inflight.current === run) inflight.current = null;
     }
   }, [sessionId]);
 
@@ -771,7 +802,11 @@ export default function TextToVideoDetailPage() {
     setActionError(null);
     try {
       // Gửi nốt sửa đổi đang chờ trước - server phải làm việc trên bản mới nhất
-      await flush();
+      const saveErr = await flush();
+      if (saveErr) {
+        setActionError(saveErr);
+        return;
+      }
       if (step === "extract") {
         adopt(await extractTextToVideo(sessionId));
       } else if (step === "script") {

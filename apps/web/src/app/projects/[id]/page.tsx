@@ -548,6 +548,8 @@ export default function ProjectDetailPage() {
   const briefInitialized = useRef(false);
   const briefDirty = useRef(false);
   const briefTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** PUT brief đang bay - flush sau phải chờ nó, kẻo bước kế tiếp chạy trước khi lưu xong */
+  const briefInflight = useRef<Promise<string | null> | null>(null);
   const [briefSaveError, setBriefSaveError] = useState<string | null>(null);
   const [briefSaved, setBriefSaved] = useState(false);
 
@@ -690,21 +692,43 @@ export default function ProjectDetailPage() {
 
   // ---- Kịch bản edit: gộp nhiều lần gõ rồi PUT một lần ----
 
-  const flushBrief = useCallback(async () => {
+  /**
+   * Gửi brief đang chờ. Trả về thông báo lỗi (null = đã lưu / không có gì để lưu).
+   * Lưu hỏng thì ĐÁNH DẤU BẨN LẠI để lần sau gửi lại, và người gọi (Bắt đầu
+   * edit) phải dừng: chạy tiếp là agent dựng theo brief CŨ trên server trong khi
+   * UI hiện brief mới - vd vừa tắt "Ảnh minh họa AI" mà video vẫn đầy ảnh.
+   */
+  const flushBrief = useCallback(async (): Promise<string | null> => {
     if (briefTimer.current) {
       clearTimeout(briefTimer.current);
       briefTimer.current = null;
     }
-    if (!briefDirty.current || !briefRef.current) return;
+    if (briefInflight.current) {
+      const prevErr = await briefInflight.current;
+      if (!briefDirty.current) return prevErr;
+    }
+    if (!briefDirty.current || !briefRef.current) return null;
     briefDirty.current = false;
     const snapshot = briefRef.current;
+    const run = (async (): Promise<string | null> => {
+      try {
+        const saved = await updateBrief(projectId, snapshot);
+        setProject((p) => (p ? { ...p, brief: saved } : p));
+        setBriefSaveError(null);
+        setBriefSaved(true);
+        return null;
+      } catch (e) {
+        briefDirty.current = true;
+        const msg = e instanceof Error ? e.message : String(e);
+        setBriefSaveError(msg);
+        return msg;
+      }
+    })();
+    briefInflight.current = run;
     try {
-      const saved = await updateBrief(projectId, snapshot);
-      setProject((p) => (p ? { ...p, brief: saved } : p));
-      setBriefSaveError(null);
-      setBriefSaved(true);
-    } catch (e) {
-      setBriefSaveError(e instanceof Error ? e.message : String(e));
+      return await run;
+    } finally {
+      if (briefInflight.current === run) briefInflight.current = null;
     }
   }, [projectId]);
 
@@ -845,7 +869,11 @@ export default function ProjectDetailPage() {
     try {
       // Tự lưu brief đang gõ trước khi bắt đầu - người dùng không phải nhớ chờ
       // debounce. CHỈ lưu khi brief thật đã nạp về (flushBrief tự bỏ qua nếu chưa).
-      await flushBrief();
+      const saveErr = await flushBrief();
+      if (saveErr) {
+        setStartError(saveErr);
+        return;
+      }
       const { sessionId } = await startProjectEdit(projectId, extraNotes, {
         model: editModel,
         effort: editEffort,

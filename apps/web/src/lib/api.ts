@@ -857,7 +857,23 @@ function withUploadToken(path: string): string {
   return path + (path.includes("?") ? "&" : "?") + `k=${encodeURIComponent(k)}`;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/**
+ * Token đã lưu không còn khớp server (cài lại có .env mới, .env không ghi được
+ * nên mỗi lần chạy sinh token khác…): bỏ nó đi để ensureToken() hỏi lại
+ * /api/health. Không bỏ thì localStorage giữ token chết mãi và mọi request,
+ * ảnh, SSE đều 401 cho tới khi người dùng tự xóa dữ liệu trang.
+ */
+function dropToken(): void {
+  apiToken = null;
+  tokenPromise = null;
+  try {
+    window.localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* bỏ qua */
+  }
+}
+
+async function request<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
   const token = await ensureToken();
   const headers = new Headers(init?.headers);
   if (token) headers.set("x-aiev-token", token);
@@ -871,6 +887,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       "Không kết nối được backend (port 6869). Kiểm tra server đã chạy chưa.",
       0
     );
+  }
+  if (res.status === 401 && token && !retried && !uploadTokenFromUrl()) {
+    dropToken();
+    return request<T>(path, init, true);
   }
   if (!res.ok) {
     let code = String(res.status);

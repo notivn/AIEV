@@ -59,7 +59,7 @@ import {
   ZoomableThumb,
   imageFileInfo,
 } from "@/components/MediaPreviewModal";
-import { useJobEvents, useJobLogEvents } from "@/lib/useEvents";
+import { useEvents, useJobEvents, useJobLogEvents } from "@/lib/useEvents";
 import { Card } from "@/components/Card";
 import { JobBadge } from "@/components/Badge";
 import { Banner } from "@/components/Banner";
@@ -229,11 +229,15 @@ export default function ImageProjectDetailPage() {
     }
   }, [imageId]);
 
+  // resyncTick: SSE vừa nối lại sau khi đứt - job có thể đã xong trong lúc đứt
+  // mà event "done" không tới, nút tạo/upload sẽ khóa mãi nếu không đối chiếu lại
+  const { resyncTick } = useEvents();
   useEffect(() => {
     load();
-  }, [load]);
+  }, [load, resyncTick]);
 
-  // Mới mở trang: tìm job image-gen của dự án này còn queued/running → bám theo
+  // Mới mở trang (hoặc SSE nối lại): tìm job image-gen của dự án này còn
+  // queued/running → bám theo; không còn job nào mà card vẫn đang chờ → gỡ card
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -253,6 +257,9 @@ export default function ImageProjectDetailPage() {
             step: j.step,
             status: j.status,
           });
+        } else if (alive && !lingerTimerRef.current) {
+          activeJobIdRef.current = null;
+          setActiveJob(null);
         }
       } catch {
         // không tìm được job đang chạy - SSE sẽ bắt kịp khi có event mới
@@ -261,7 +268,7 @@ export default function ImageProjectDetailPage() {
     return () => {
       alive = false;
     };
-  }, [imageId]);
+  }, [imageId, resyncTick]);
 
   // Dọn timer giữ card tiến trình khi rời trang
   useEffect(

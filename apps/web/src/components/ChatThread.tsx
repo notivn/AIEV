@@ -342,6 +342,24 @@ export function ChatThread({
         setStartedAt(Number.isFinite(ts) ? ts : Date.now());
         setCurrentAction(t("chat.working"));
       }
+      // Chiều ngược lại: SSE rớt (máy ngủ, backend restart) đúng lúc phiên kết
+      // thúc nên `done` không bao giờ tới - panel kẹt progress + nút Dừng mãi
+      // mãi. Server báo đã xong SAU mốc bắt đầu lượt này thì tin server. So mốc
+      // runFinishedAt để danh sách phiên tải về trước khi lượt mới chạy không
+      // tắt nhầm progress của lượt mới.
+      const finished = session.runFinishedAt ? Date.parse(session.runFinishedAt) : NaN;
+      if (
+        running &&
+        session.status !== "running" &&
+        Number.isFinite(finished) &&
+        startedAt !== null &&
+        finished >= startedAt
+      ) {
+        flushStream();
+        setStatus(session.status);
+        setRunning(false);
+        setJustFailed(session.status === "error");
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- chỉ phản ứng khi prop session đổi
   }, [session]);

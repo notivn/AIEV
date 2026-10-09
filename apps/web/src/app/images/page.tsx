@@ -24,7 +24,7 @@ import {
   type FileInfo,
   type ImageProject,
 } from "@/lib/api";
-import { useJobEvents } from "@/lib/useEvents";
+import { useEvents, useJobEvents } from "@/lib/useEvents";
 import { Card } from "@/components/Card";
 import { Banner } from "@/components/Banner";
 import { Button } from "@/components/Button";
@@ -117,9 +117,12 @@ function ImageProjectList({ onCreate }: { onCreate: () => void }) {
     }
   }, []);
 
+  // resyncTick: SSE vừa nối lại - job có thể đã xong trong lúc đứt, refetch
+  // để thanh tiến trình không kẹt
+  const { resyncTick } = useEvents();
   useEffect(() => {
     load();
-  }, [load]);
+  }, [load, resyncTick]);
 
   // Job "image-gen" đổi trạng thái → cập nhật sống danh sách + progress
   useJobEvents((job) => {
