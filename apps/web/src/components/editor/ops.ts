@@ -1004,3 +1004,201 @@ export function splitAtPlayhead(
   if (next === tl) return null;
   return { timeline: next, selection: { kind: "scene", id: chosen.id } };
 }
+
+// ================================================================ thêm mới (thư viện, thêm tại playhead)
+
+/**
+ * Id scene kebab-case suy từ tên file ("Cảnh quay 1.mp4" → "canh-quay-1"), không
+ * trùng id đang có (trùng thì "-2", "-3"…). Bỏ dấu tiếng Việt để id đọc được và
+ * an toàn làm tên file render.
+ */
+export function sceneIdFromFile(scenes: TimelineScene[], relPath: string): string {
+  const name = relPath.split(/[\\/]/).pop() ?? relPath;
+  const stem = name.replace(/\.[^.]+$/, "");
+  const kebab = stem
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[đĐ]/g, "d")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40)
+    .replace(/-+$/, "");
+  const base = kebab || "scene";
+  return scenes.some((s) => s.id === base) ? uniqueSceneId(scenes, base) : base;
+}
+
+/** Độ dài tối đa (giây) của scene footage mới kéo từ thư viện. */
+export const NEW_FOOTAGE_MAX_SEC = 5;
+/** Độ dài (giây) của scene ảnh mới. */
+export const NEW_IMAGE_SEC = 3;
+
+/**
+ * Scene footage mới: đoạn đầu file, dài tối đa 5 giây (file ngắn hơn thì cả
+ * file), tắt tiếng gốc - video thường đã có giọng đọc, tiếng footage chồng lên
+ * là lỗi hay gặp nhất. `durationSec` chưa biết thì lấy 5 giây.
+ */
+export function newFootageScene(
+  id: string,
+  relPath: string,
+  durationSec: number | null,
+  fps: number,
+): TimelineScene {
+  const maxFrames = Math.round(NEW_FOOTAGE_MAX_SEC * fps);
+  const fileFrames =
+    durationSec !== null && Number.isFinite(durationSec) && durationSec > 0
+      ? Math.floor(durationSec * fps + 1e-6)
+      : maxFrames;
+  const frames = Math.max(1, Math.min(maxFrames, fileFrames));
+  return { id, srcVideo: relPath, from: 0, to: frameToSec(frames, fps), muted: true };
+}
+
+/** Scene ảnh tĩnh mới - 3 giây. */
+export function newImageScene(id: string, relPath: string, fps: number): TimelineScene {
+  return { id, srcImage: relPath, durationInFrames: Math.max(1, Math.round(NEW_IMAGE_SEC * fps)) };
+}
+
+/**
+ * Chèn scene vào vị trí `index` (kẹp [0, số scene]). Id trùng/rỗng → không làm
+ * gì (trả về chính timeline) - id do nơi gọi sinh bằng sceneIdFromFile.
+ */
+export function addScene(tl: Timeline, index: number, scene: TimelineScene): Timeline {
+  if (!scene.id || tl.scenes.some((s) => s.id === scene.id)) return tl;
+  const at = clampInt(Number.isFinite(index) ? index : tl.scenes.length, 0, tl.scenes.length);
+  const scenes = tl.scenes.slice();
+  scenes.splice(at, 0, scene);
+  return { ...tl, scenes };
+}
+
+/** Âm lượng mặc định của sfx thêm từ editor. */
+export const NEW_SFX_VOLUME = 0.8;
+
+/**
+ * Thêm một sfx tại `atFrame` (frame tuyệt đối). Nối vào CUỐI mảng - thứ tự
+ * trong mảng không ảnh hưởng lúc phát - nên chỉ số của sfx cũ không đổi
+ * (selection đang trỏ vào chúng vẫn đúng). Trả kèm selection của sfx mới.
+ */
+export function addSfx(
+  tl: Timeline,
+  file: string,
+  atFrame: number,
+  volume: number = NEW_SFX_VOLUME,
+): { timeline: Timeline; selection: Selection | null } {
+  if (!file || !Number.isFinite(atFrame)) return { timeline: tl, selection: null };
+  const sfx: TimelineSfx = {
+    file,
+    atFrame: Math.max(0, Math.round(atFrame)),
+    volume: Math.min(1, Math.max(0, volume)),
+  };
+  const list = [...tl.audio.sfx, sfx];
+  return {
+    timeline: { ...tl, audio: { ...tl.audio, sfx: list } },
+    selection: { kind: "sfx", index: list.length - 1 },
+  };
+}
+
+/** Mức nhạc nền mặc định: nền nhẹ, hạ sâu dưới lời (skill background-music). */
+export const NEW_MUSIC_DEFAULTS = { volume: 0.25, duckVolume: 0.1 } as const;
+
+/**
+ * Đặt nhạc nền. Chưa có nhạc → mức mặc định. Đã có → THAY FILE, giữ nguyên mức
+ * âm lượng/duck người dùng đã chỉnh, các đoạn có lời (`speech` - tính từ
+ * transcript, không phụ thuộc bài nhạc) và field lạ.
+ */
+export function setMusic(tl: Timeline, file: string): Timeline {
+  if (!file) return tl;
+  const cur = tl.audio.music;
+  if (!cur) {
+    return { ...tl, audio: { ...tl.audio, music: { file, ...NEW_MUSIC_DEFAULTS } } };
+  }
+  if (cur.file === file) return tl;
+  return { ...tl, audio: { ...tl.audio, music: { ...cur, file } } };
+}
+
+/** Độ dài mặc định (giây) của cue thêm tại playhead. */
+export const NEW_CUE_SEC = 2;
+
+export type NewCue =
+  | { kind: "overlay"; text: string }
+  | { kind: "subtitle"; text: string }
+  | { kind: "caption"; word: string };
+
+/**
+ * Thêm một cue bắt đầu tại `from`, dài `durationInFrames`. Chèn theo thứ tự thời
+ * gian (cue cùng mốc thì đứng sau) để danh sách trong meta.json vẫn dễ đọc.
+ * - highlight: một mẩu chữ, key chính, màu nóng;
+ * - phụ đề: một dòng chữ;
+ * - karaoke: MỘT từ phủ hết cue (sửa/thêm từ trong inspector).
+ * Trả kèm selection của cue mới để inspector mở ngay.
+ */
+export function addCue(
+  tl: Timeline,
+  cue: NewCue,
+  from: number,
+  durationInFrames: number,
+): { timeline: Timeline; selection: Selection | null } {
+  const start = Math.max(0, Math.round(from));
+  const dur = Math.max(1, Math.round(durationInFrames));
+  if (!Number.isFinite(start) || !Number.isFinite(dur)) return { timeline: tl, selection: null };
+  const insertAt = (list: BaseCue[]): number => {
+    const i = list.findIndex((c) => c.from > start);
+    return i === -1 ? list.length : i;
+  };
+  switch (cue.kind) {
+    case "overlay": {
+      const text = cue.text.trim();
+      if (!text) return { timeline: tl, selection: null };
+      const at = insertAt(tl.overlays);
+      const overlays = tl.overlays.slice();
+      overlays.splice(at, 0, {
+        from: start,
+        durationInFrames: dur,
+        parts: [{ t: text }],
+        tier: "main",
+        accent: "hot",
+      });
+      return { timeline: { ...tl, overlays }, selection: { kind: "overlay", index: at } };
+    }
+    case "subtitle": {
+      const text = cue.text.trim();
+      if (!text) return { timeline: tl, selection: null };
+      const at = insertAt(tl.subtitles);
+      const subtitles = tl.subtitles.slice();
+      subtitles.splice(at, 0, { from: start, durationInFrames: dur, text });
+      return { timeline: { ...tl, subtitles }, selection: { kind: "subtitle", index: at } };
+    }
+    case "caption": {
+      const word = cue.word.trim();
+      if (!word) return { timeline: tl, selection: null };
+      const at = insertAt(tl.captions);
+      const captions = tl.captions.slice();
+      captions.splice(at, 0, {
+        from: start,
+        durationInFrames: dur,
+        words: [{ text: word, start, end: start + dur }],
+      });
+      return { timeline: { ...tl, captions }, selection: { kind: "caption", index: at } };
+    }
+  }
+}
+
+/**
+ * Độ dài cue mới tại `from`: mặc định 2 giây; playhead gần cuối video thì co lại
+ * cho cue kết thúc cùng video - trừ khi chỗ còn lại ngắn hơn nửa giây (cue vài
+ * frame không ai đọc kịp), khi đó vẫn giữ đủ 2 giây.
+ */
+export function newCueDuration(from: number, totalFrames: number, fps: number): number {
+  const full = Math.max(1, Math.round(NEW_CUE_SEC * fps));
+  const remaining = totalFrames - Math.round(from);
+  if (remaining >= full) return full;
+  return remaining >= Math.round(fps / 2) ? remaining : full;
+}
+
+/**
+ * Vị trí chèn scene theo frame trên timeline: trước scene có điểm giữa nằm sau
+ * `frame`, không có thì cuối cùng - cùng luật với kéo đổi thứ tự scene.
+ */
+export function sceneInsertIndexAt(spans: { start: number; end: number }[], frame: number): number {
+  const i = spans.findIndex((s) => frame < (s.start + s.end) / 2);
+  return i === -1 ? spans.length : i;
+}

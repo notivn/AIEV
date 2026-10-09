@@ -57,6 +57,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -80,7 +81,19 @@ const PANEL_STORAGE_KEY = "aiev-panel";
  * THEME_SCRIPT trong layout.tsx làm với theme. Đặt làm phần tử đầu của shell nên
  * nó chạy lúc trình duyệt còn đang phân tích markup, xong trước khi có gì được vẽ.
  */
-const SHELL_SCRIPT = `try{var d=document.documentElement,n=localStorage.getItem("${NAV_STORAGE_KEY}");if(n==="collapsed"||n==="expanded")d.setAttribute("data-nav",n);if(localStorage.getItem("${PANEL_STORAGE_KEY}")==="collapsed")d.setAttribute("data-panel","collapsed")}catch(e){}`;
+const SHELL_SCRIPT = `try{var d=document.documentElement,p=location.pathname.split("/");if(p[1]==="projects"&&p[3]==="editor"&&!p[4]){d.setAttribute("data-nav","collapsed")}else{var n=localStorage.getItem("${NAV_STORAGE_KEY}");if(n==="collapsed"||n==="expanded")d.setAttribute("data-nav",n)}if(localStorage.getItem("${PANEL_STORAGE_KEY}")==="collapsed")d.setAttribute("data-panel","collapsed")}catch(e){}`;
+
+/**
+ * Trang trình chỉnh sửa video (/projects/<id>/editor) - màn hình công cụ cần
+ * từng pixel cho trình phát, nên rail TỰ GẤP khi vào và trả lại đúng lựa chọn
+ * của người dùng khi rời trang. Lần gấp ép này KHÔNG ghi vào localStorage:
+ * nó không phải lựa chọn của người dùng. (SHELL_SCRIPT ở trên làm cùng phép
+ * kiểm tra đường dẫn để tải thẳng trang editor không nháy rail bung rồi co.)
+ */
+function isEditorPath(pathname: string): boolean {
+  const parts = pathname.split("/");
+  return parts[1] === "projects" && parts[3] === "editor" && !parts[4];
+}
 
 /**
  * Dưới ngưỡng này rail MẶC ĐỊNH gấp lại (xem lý do con số trong globals.css).
@@ -265,20 +278,49 @@ export function Shell({ children }: { children: ReactNode }) {
   // chứ không đọc lại localStorage: một nguồn sự thật, không sợ hai bên lệch.
   // Đây CHỈ để nhãn aria/tooltip nói đúng - bề rộng do CSS lo, nên listener này
   // có chậm một nhịp cũng không làm layout nhảy.
-  useEffect(() => {
-    const mq = window.matchMedia(NAV_AUTO_COLLAPSE);
-    const sync = () => {
-      const attr = document.documentElement.getAttribute("data-nav");
-      if (attr === "collapsed") setNavCollapsed(true);
-      else if (attr === "expanded") setNavCollapsed(false);
-      else setNavCollapsed(mq.matches);
-    };
-    sync();
-    mq.addEventListener("change", sync);
-    return () => mq.removeEventListener("change", sync);
+  const syncNav = useCallback(() => {
+    const attr = document.documentElement.getAttribute("data-nav");
+    if (attr === "collapsed") setNavCollapsed(true);
+    else if (attr === "expanded") setNavCollapsed(false);
+    else setNavCollapsed(window.matchMedia(NAV_AUTO_COLLAPSE).matches);
   }, []);
 
+  useEffect(() => {
+    const mq = window.matchMedia(NAV_AUTO_COLLAPSE);
+    syncNav();
+    mq.addEventListener("change", syncNav);
+    return () => mq.removeEventListener("change", syncNav);
+  }, [syncNav]);
+
+  /** Lựa chọn rail người dùng bấm trong phiên này (kể cả khi localStorage bị chặn) */
+  const navChoiceRef = useRef<"collapsed" | "expanded" | null>(null);
+
+  // Vào trình chỉnh sửa: gấp rail (không ghi nhớ). Rời đi: trả lại lựa chọn của
+  // người dùng - bấm mở/gấp ngay trong editor thì đó là lựa chọn mới, giữ nó.
+  const onEditor = isEditorPath(pathname);
+  useEffect(() => {
+    if (!onEditor) return;
+    const root = document.documentElement;
+    root.setAttribute("data-nav", "collapsed");
+    syncNav();
+    return () => {
+      let saved: string | null = null;
+      try {
+        saved = localStorage.getItem(NAV_STORAGE_KEY);
+      } catch {
+        // localStorage bị chặn - dùng lựa chọn trong phiên (nếu có)
+      }
+      const pref =
+        navChoiceRef.current ?? (saved === "collapsed" || saved === "expanded" ? saved : null);
+      // Chưa từng chọn → bỏ thuộc tính, rail về phép tự gấp theo bề rộng màn hình
+      if (pref) root.setAttribute("data-nav", pref);
+      else root.removeAttribute("data-nav");
+      syncNav();
+    };
+  }, [onEditor, syncNav]);
+
   const setNav = useCallback((next: boolean) => {
+    navChoiceRef.current = next ? "collapsed" : "expanded";
     setNavCollapsed(next);
     // Ghi HẲN "expanded" chứ không xóa thuộc tính: xóa đi là rơi lại vào phép tự
     // gấp theo bề rộng, tức là ở màn hẹp người dùng bấm mở mà rail không mở.

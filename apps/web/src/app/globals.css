@@ -1138,6 +1138,70 @@ textarea.input {
 .editor-inspector {
   min-width: 0;
 }
+/* Cột Thư viện (asset project · hiệu ứng âm · nhạc). Màn hẹp: một khối trong
+   cột dọc, nằm DƯỚI trình phát (trình phát luôn ở trên cùng), danh sách tự cuộn
+   trong khung cao tối đa 320px. */
+.editor-library {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.editor-library-list {
+  min-height: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.editor-library.is-collapsed {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+}
+.editor-library-strip-label {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.editor-center {
+  order: -1;
+  container-type: inline-size;
+}
+/* Cột giữa hẹp (thư viện + inspector + panel AI cùng mở): bỏ hai nút về
+   đầu/về cuối (Home/End vẫn chạy) để nút phát và mốc giờ nằm trên MỘT hàng -
+   xuống hàng là trình phát mất thêm 40px chiều cao. */
+@container (max-width: 340px) {
+  .editor-transport [data-optional] {
+    display: none;
+  }
+}
+/* Một món trong thư viện - kéo được (HTML5 drag) lên timeline */
+.lib-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  cursor: grab;
+  transition: background-color var(--transition);
+}
+.lib-item:hover,
+.lib-item:focus-within {
+  background: var(--bg-subtle);
+}
+.lib-item[draggable="false"] {
+  cursor: default;
+}
+.lib-item-icon {
+  flex: none;
+  color: var(--text-muted);
+}
 @media (min-width: 1100px) {
   .editor-root {
     height: calc(100dvh - 96px);
@@ -1145,9 +1209,29 @@ textarea.input {
   }
   .editor-main {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 340px;
+    grid-template-columns: 264px minmax(0, 1fr) 340px;
     flex: 1 1 0;
     min-height: 0;
+  }
+  .editor-main[data-library="collapsed"] {
+    grid-template-columns: 48px minmax(0, 1fr) 340px;
+  }
+  .editor-center {
+    order: 0;
+  }
+  .editor-library-list {
+    flex: 1 1 0;
+    min-height: 96px;
+    max-height: none;
+  }
+  /* Gấp lại: dải dọc mỏng, nút mở ở trên, nhãn chạy dọc */
+  .editor-library.is-collapsed {
+    flex-direction: column;
+    padding: 8px 0;
+  }
+  .editor-library.is-collapsed .editor-library-strip-label {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
   }
   .editor-center {
     min-height: 0;
@@ -1259,7 +1343,7 @@ textarea.input {
 }
 .tl-row {
   display: flex;
-  height: 36px;
+  height: 32px;
   border-bottom: 1px solid var(--border);
 }
 .tl-label {
@@ -1287,6 +1371,12 @@ textarea.input {
 .tl-lane {
   position: relative;
   flex: 1 1 auto;
+}
+/* Làn sẽ nhận món đang kéo từ cột Thư viện */
+.tl-row[data-drop="true"] > .tl-lane {
+  background: var(--bg-subtle);
+  outline: 1px dashed var(--timeline-snap);
+  outline-offset: -3px;
 }
 .tl-empty {
   position: absolute;
@@ -1462,15 +1552,17 @@ textarea.input {
   border-left: 1px dashed var(--timeline-snap);
   pointer-events: none;
 }
+/* Vạch chèn scene (kéo đổi thứ tự / thả từ thư viện) - màu chữ chính chứ không
+   phải màu snap: track Video cũng màu xanh, vạch xanh trên viền xanh là mất hút */
 .tl-drop {
   position: absolute;
-  top: 2px;
-  bottom: 2px;
+  top: 0;
+  bottom: 0;
   z-index: 3;
-  width: 2px;
+  width: 3px;
   margin-left: -1px;
   border-radius: 9999px;
-  background: var(--timeline-snap);
+  background: var(--text);
   pointer-events: none;
 }
 
@@ -1509,7 +1601,7 @@ textarea.input {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  width: 240px;
+  width: 272px;
   margin-top: 4px;
   padding: 8px;
   border: 1px solid var(--border);

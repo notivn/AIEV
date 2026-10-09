@@ -23,6 +23,7 @@ import {
   Maximize2,
   Mic,
   Music,
+  Plus,
   Sparkles,
   Subtitles,
   ZoomIn,
@@ -36,6 +37,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type DragEvent as ReactDragEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
@@ -44,12 +46,20 @@ import type { Timeline, TimelinePreview } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useEditor } from "./EditorContext";
 import {
+  acceptedTracks,
+  readDragData,
+  type DropTarget,
+  type DropTrack,
+  type LibraryItem,
+} from "./library";
+import {
   CUE_KIND,
   isCueSel,
   moveCue,
   moveSfx,
   reorderScene,
   resizeCue,
+  sceneInsertIndexAt,
   sceneKind,
   sceneSourcePath,
   trimScene,
@@ -78,6 +88,9 @@ const SNAP_PX = 8;
 const EDGE_SCROLL_PX = 32;
 
 type TrackKey = "scene" | "overlay" | "caption" | "subtitle" | "sfx" | "voice" | "music";
+
+/** Track có nút "+" thêm cue tại playhead. */
+export type AddCueKind = "overlay" | "caption" | "subtitle";
 
 type DragMode = "move" | "trim-start" | "trim-end" | "reorder" | "scrub";
 
@@ -151,6 +164,8 @@ export function TimelinePanel({
   totalFrames,
   preview,
   height,
+  onLibraryDrop,
+  onAddCue,
 }: {
   timeline: Timeline;
   spans: SceneSpan[];
@@ -158,6 +173,10 @@ export function TimelinePanel({
   preview: TimelinePreview;
   /** Chiều cao khung (px) - do tay nắm kéo của trang quyết định */
   height: number;
+  /** Thả một món từ cột Thư viện lên timeline (trang lo chép file + sửa) */
+  onLibraryDrop: (item: LibraryItem, target: DropTarget) => void;
+  /** Nút "+" ở nhãn track: thêm cue tại playhead */
+  onAddCue: (kind: AddCueKind) => void;
 }) {
   const { t, tf } = useT();
   const editor = useEditor();
@@ -169,6 +188,8 @@ export function TimelinePanel({
   const autoFitRef = useRef(true);
   const [viewport, setViewport] = useState({ left: 0, width: 800 });
   const [dragView, setDragView] = useState<DragView | null>(null);
+  /** Món thư viện đang được kéo ngang timeline - track sẽ nhận + vị trí */
+  const [libDrop, setLibDrop] = useState<DropTarget | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const rafRef = useRef<number | null>(null);
   const pendingRef = useRef<(() => void) | null>(null);
@@ -383,9 +404,66 @@ export function TimelinePanel({
     return null;
   };
 
-  const dropIndexAt = (frame: number): number => {
-    const i = spans.findIndex((s) => frame < (s.start + s.end) / 2);
-    return i === -1 ? spans.length : i;
+  const dropIndexAt = (frame: number): number => sceneInsertIndexAt(spans, frame);
+
+  // ---------------------------------------------------------------- thả từ thư viện
+
+  /**
+   * Đích thả của một món thư viện tại con trỏ. Món chỉ vào được MỘT track (video,
+   * ảnh, sfx thư viện, nhạc) thì thả đâu trên timeline cũng về đúng track đó;
+   * audio của project (sfx hoặc nhạc) thì theo làn dưới con trỏ, mặc định sfx.
+   */
+  const libraryTargetAt = (e: ReactDragEvent<HTMLDivElement>): DropTarget | null => {
+    if (readOnly) return null;
+    const accepted = acceptedTracks([...e.dataTransfer.types]);
+    if (accepted.length === 0) return null;
+    const row = e.target instanceof Element ? e.target.closest(".tl-row[data-track]") : null;
+    const under = row?.getAttribute("data-track") as DropTrack | null | undefined;
+    const track = under && accepted.includes(under) ? under : accepted[0];
+    let frame = Math.round(frameAtClient(e.clientX));
+    // Sfx hít vào playhead / mép phần tử khác như khi kéo khối (Alt tắt hít)
+    if (track === "sfx") frame += snapDelta(0, [frame], snapCandidates(null, "move", -1), e.altKey).delta;
+    return { track, frame, sceneIndex: dropIndexAt(frame) };
+  };
+
+  const onDragOver = (e: ReactDragEvent<HTMLDivElement>) => {
+    const target = libraryTargetAt(e);
+    if (!target) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    setLibDrop((cur) =>
+      cur && cur.track === target.track && cur.frame === target.frame && cur.sceneIndex === target.sceneIndex
+        ? cur
+        : target,
+    );
+  };
+
+  const onDragLeave = (e: ReactDragEvent<HTMLDivElement>) => {
+    // Rời hẳn khung timeline (không phải chỉ đi qua một khối con)
+    const next = e.relatedTarget;
+    if (next instanceof Node && e.currentTarget.contains(next)) return;
+    setLibDrop(null);
+  };
+
+  // Lượt kéo bị hủy (Esc, thả ngoài cửa sổ) không phải lúc nào cũng bắn dragleave
+  // lên khung timeline - dọn chỉ báo ở dragend của cả trang cho chắc
+  useEffect(() => {
+    const clear = () => setLibDrop(null);
+    window.addEventListener("dragend", clear);
+    window.addEventListener("drop", clear);
+    return () => {
+      window.removeEventListener("dragend", clear);
+      window.removeEventListener("drop", clear);
+    };
+  }, []);
+
+  const onDrop = (e: ReactDragEvent<HTMLDivElement>) => {
+    const target = libraryTargetAt(e);
+    setLibDrop(null);
+    if (!target) return;
+    e.preventDefault();
+    const item = readDragData(e.dataTransfer);
+    if (item) onLibraryDrop(item, target);
   };
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -763,14 +841,19 @@ export function TimelinePanel({
     return out;
   }, [pps, fps, viewport.left, viewport.width]);
 
+  const sceneBoundaryX = (index: number): number =>
+    x(index < spans.length ? spans[index].start : (spans[spans.length - 1]?.end ?? 0));
   const dropX =
     dragView?.dropIndex !== null && dragView?.dropIndex !== undefined
-      ? x(
-          dragView.dropIndex < spans.length
-            ? spans[dragView.dropIndex].start
-            : (spans[spans.length - 1]?.end ?? 0),
-        )
-      : null;
+      ? sceneBoundaryX(dragView.dropIndex)
+      : libDrop?.track === "scene"
+        ? sceneBoundaryX(libDrop.sceneIndex)
+        : null;
+  const addCueLabel: Record<AddCueKind, string> = {
+    overlay: t("editor.add.highlight"),
+    caption: t("editor.add.karaoke"),
+    subtitle: t("editor.add.subtitle"),
+  };
 
   return (
     <section className="tl" style={{ height }} aria-label={t("editor.timeline.title")}>
@@ -824,6 +907,9 @@ export function TimelinePanel({
         onPointerUp={(e) => finishDrag(e, false)}
         onPointerCancel={(e) => finishDrag(e, true)}
         onLostPointerCapture={(e) => finishDrag(e, false)}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
       >
         <div className="tl-content" style={{ width: contentWidth }}>
           <div className="tl-ruler">
@@ -847,11 +933,27 @@ export function TimelinePanel({
           </div>
 
           {tracks.map((track) => (
-            <div key={track.key} className="tl-row" data-track={track.key}>
+            <div
+              key={track.key}
+              className="tl-row"
+              data-track={track.key}
+              data-drop={libDrop?.track === track.key ? "true" : undefined}
+            >
               <div className="tl-label text-meta font-medium" style={{ width: LABEL_W }}>
                 <span className="tl-label-swatch" aria-hidden="true" />
                 <track.icon size={14} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />
-                <span className="min-w-0 truncate">{track.label}</span>
+                <span className="min-w-0 flex-1 truncate">{track.label}</span>
+                {(track.key === "overlay" || track.key === "caption" || track.key === "subtitle") && (
+                  <IconButton
+                    label={addCueLabel[track.key]}
+                    size="sm"
+                    disabled={readOnly}
+                    onClick={() => onAddCue(track.key as AddCueKind)}
+                    data-add-cue={track.key}
+                  >
+                    <Plus size={13} strokeWidth={2} />
+                  </IconButton>
+                )}
               </div>
               <div className="tl-lane" data-lane="">
                 {track.extra}
@@ -868,6 +970,9 @@ export function TimelinePanel({
             </div>
           ))}
 
+          {libDrop?.track === "sfx" && (
+            <span className="tl-snap" style={{ left: LABEL_W + x(libDrop.frame) }} aria-hidden="true" />
+          )}
           {dragView?.snapAt !== null && dragView?.snapAt !== undefined && (
             <span
               className="tl-snap"

@@ -37,6 +37,8 @@ export interface EditorMenuItem {
   icon: LucideIcon;
   onSelect: () => void;
   disabled?: boolean;
+  /** Dòng chú thích nhỏ dưới nhãn (vd giới hạn của tính năng) */
+  hint?: string;
 }
 
 const SAVE_TONE: Record<SaveState, BadgeTone> = {
@@ -245,8 +247,11 @@ function EditorMenu({ items }: { items: EditorMenuItem[] }) {
                 item.onSelect();
               }}
             >
-              <item.icon size={14} strokeWidth={2} className="shrink-0 text-[var(--text-muted)]" />
-              {item.label}
+              <item.icon size={14} strokeWidth={2} className="mt-0.5 shrink-0 self-start text-[var(--text-muted)]" />
+              <span className="min-w-0">
+                <span className="block">{item.label}</span>
+                {item.hint && <span className="block text-meta text-[var(--text-muted)]">{item.hint}</span>}
+              </span>
             </button>
           ))}
         </div>
