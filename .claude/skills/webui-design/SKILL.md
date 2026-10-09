@@ -5,7 +5,7 @@ description: Design system for the AI Edit Video web dashboard (noti.vn) - the t
 
 # Web UI Design System - AI Edit Video by noti.vn
 
-The web UI is a **monitoring and management dashboard**, not a video editor. Aesthetic standard: Shopify Admin - minimal, high information density but still airy, every element has a reason to exist.
+The web UI is a **monitoring and management dashboard** with one exception: the **video editor** at `/projects/[id]/editor` (preview player + timeline + inspector + AI chat, see `docs/EDITOR-PLAN.md` and section 12). Aesthetic standard everywhere, the editor included: Shopify Admin - minimal, high information density but still airy, every element has a reason to exist.
 
 **Enforcement:** `cd apps/web && node scripts/check-design-system.mjs`. It flags off-scale type sizes, off-rhythm spacing, raw colors, and hand-rolled copies of existing primitives. Run it before you claim a UI change is done.
 
@@ -213,4 +213,16 @@ Destructive and save actions live in `<PageHeader actions>` on every detail page
 - Never a color outside the token table (including Tailwind grays and alpha-modified tokens).
 - Never a hex value in JSX/TSX.
 - Never re-implement something in the primitive table above. If a primitive nearly fits, extend the primitive - do not fork it locally.
-- Never add video editor features to the web UI - all video processing lives in the backend/engine.
+- Never process or encode video in the browser. The editor only PREVIEWS (Remotion Player) and EDITS `meta.json`; every render goes through the backend render queue.
+- Never add editing features outside `/projects/[id]/editor` - other pages stay monitoring/management pages.
+
+## 12. The video editor (`/projects/[id]/editor`)
+
+The one dense, tool-style screen in the app. Everything above still applies (type scale, tokens, primitives, Lucide icons, `t()` strings in vi + en); these are the editor-specific additions:
+
+- **Layout**: top bar (back, name, save state, undo/redo, history, export, render) - left library (collapsible) - center preview player - right inspector - bottom timeline (resizable). The AI chat lives in the shell's existing right panel (`ShellRightPanel`), not in a second chat UI.
+- **Timeline colors are tokens**: track colors are CSS custom properties defined for light AND dark in `globals.css` (`--track-*`), never hex and never Tailwind palette classes.
+- **Allowed motion** (in addition to section 11): the playhead moving with playback, and an element following the pointer while it is dragged. No other animation.
+- **Every edit is saved** automatically (debounced) with the timeline version from the server; a conflict is shown as a banner with "load latest" / "keep mine", never resolved silently.
+- **Read-only while the AI is editing** the same project, with a banner saying so; the preview reloads as the AI writes.
+- **Keyboard first**: Space play/pause, arrows step frames, S split, Delete remove, Ctrl/Cmd+Z / Shift+Z undo/redo, `?` shows the shortcut list. Shortcuts never fire while focus is in a text input.

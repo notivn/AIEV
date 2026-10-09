@@ -9,7 +9,8 @@ Hệ thống gồm 3 tầng, phân vai rõ ràng — **không trộn lẫn vai t
 ```
 ┌─────────────────────────────────────────────────────┐
 │  Web UI (Next.js, port 6868)                        │
-│  CHỈ để hiển thị & quản lý — không xử lý video      │
+│  Hiển thị, quản lý + trình chỉnh sửa (xem trước/sửa │
+│  timeline) — KHÔNG mã hóa/xử lý video               │
 │  Dashboard · Videos Project · Images Project ·      │
 │  Style Design · Render Queue · Assets ·             │
 │  Sound Effects · Prompts · Skills · Cấu hình ·      │
@@ -33,7 +34,9 @@ Hệ thống gồm 3 tầng, phân vai rõ ràng — **không trộn lẫn vai t
 └──────────────────┘        └──────────────────────┘
 ```
 
-**Nguyên tắc vàng:** HyperFrames làm gì giỏi thì để nó làm (kinetic typography, caption karaoke, motion graphics, shader). Remotion làm gì giỏi thì để nó làm (ghép sequence, transition giữa scene, mix audio/sound effect, xuất bản cuối). Claude là đạo diễn điều phối cả hai qua CLI + file — mọi thao tác đều là code chạy bên dưới, web UI chỉ nhìn vào.
+**Nguyên tắc vàng:** HyperFrames làm gì giỏi thì để nó làm (kinetic typography, caption karaoke, motion graphics, shader). Remotion làm gì giỏi thì để nó làm (ghép sequence, transition giữa scene, mix audio/sound effect, xuất bản cuối). Claude là đạo diễn điều phối cả hai qua CLI + file — mọi thao tác đều là code chạy bên dưới.
+
+**Trình chỉnh sửa** (`/projects/[id]/editor`, chi tiết ở `docs/EDITOR-PLAN.md`): người dùng xem trước bằng Remotion Player chạy đúng composition `Assemble` trong trình duyệt và sửa timeline (scene, karaoke, phụ đề, highlight, sfx, nhạc) bằng tay hoặc qua chat AI. Mọi thao tác ghi vào `meta.json` qua API có phiên bản (`/api/projects/:id/timeline`) - `meta.json` vẫn là nguồn sự thật duy nhất. Trình duyệt chỉ XEM TRƯỚC, không bao giờ mã hóa video: xuất bản vẫn đi qua render queue. Vì người dùng có thể sửa `meta.json` bất kỳ lúc nào, agent phải **đọc lại meta.json ngay trước khi sửa**, sửa đúng chỗ, giữ nguyên field lạ.
 
 ## 2. Cấu trúc thư mục
 
@@ -137,7 +140,7 @@ Quy tắc bắt buộc:
 
 ## 6. Web UI — quy tắc thiết kế (chi tiết ở skill `webui-design`)
 
-Web UI là **dashboard giám sát**, không phải video editor. Tối giản kiểu Shopify Admin: đầy đủ tính năng, gọn gàng, không màu mè.
+Web UI là **dashboard giám sát**; ngoại lệ duy nhất là **trình chỉnh sửa video** ở `/projects/[id]/editor` (xem mục 1). Tối giản kiểu Shopify Admin: đầy đủ tính năng, gọn gàng, không màu mè - kể cả trong trình chỉnh sửa.
 
 **Thang chữ - ba bậc, không có bậc thứ tư** (luật quan trọng nhất, cưỡng chế bằng `node apps/web/scripts/check-design-system.mjs`):
 
