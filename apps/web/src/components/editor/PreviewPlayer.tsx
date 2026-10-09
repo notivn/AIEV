@@ -437,6 +437,10 @@ export function PreviewPlayer({
       // định 5 sẽ sập ngay ở project có vài sfx. 0 = mỗi <Audio> tự có thẻ riêng;
       // play() luôn đi từ thao tác của người dùng nên không vướng chặn autoplay.
       numberOfSharedAudioTags={0}
+      // Chủ dự án đã đọc điều khoản giấy phép Remotion và tự chịu trách nhiệm
+      // (README mục Giấy phép: công ty > 3 người cần gói "Automators") - tắt
+      // dòng nhắc giấy phép in ra console mỗi lần mở trình chỉnh sửa
+      acknowledgeRemotionLicense
       errorFallback={errorFallback}
       style={style}
     />
