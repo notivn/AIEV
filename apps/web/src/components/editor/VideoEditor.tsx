@@ -18,7 +18,7 @@
  * - phím tắt (không bao giờ khi đang gõ trong ô nhập).
  */
 
-import { Clapperboard, Keyboard, LayoutDashboard } from "lucide-react";
+import { Clapperboard, FileDown, History, Keyboard, LayoutDashboard } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
   useCallback,
@@ -34,17 +34,24 @@ import { Button } from "@/components/Button";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorBanner } from "@/components/ErrorBanner";
 import { LinkButton } from "@/components/LinkButton";
+import { Modal } from "@/components/Modal";
 import { Skeleton } from "@/components/Skeleton";
 import {
   ApiError,
   getChatSessions,
   getJobs,
+  getMediaInfo,
   getTimeline,
+  importLibraryFile,
+  restoreTimelineRevision,
   saveTimeline,
   startEditorRender,
   timelineConflictOf,
+  timelineExportUrl,
   timelineIssuesOf,
   type Job,
+  type TimelineMediaInfo,
+  type TimelineRevision,
   type Timeline,
   type TimelineIssue,
   type TimelineLock,
@@ -52,13 +59,20 @@ import {
   type TimelinePreview,
   type TimelineProject,
 } from "@/lib/api";
+import { formatDateTime } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import { useAgentEvents, useEvents, useJobEvents } from "@/lib/useEvents";
 import { EditorChat } from "./EditorChat";
 import { EditorContext, type EditorApi, type EditOptions } from "./EditorContext";
 import { EditorTopBar, type EditorMenuItem, type SaveState } from "./EditorTopBar";
+import { HistoryModal, type RestoreOutcome } from "./HistoryModal";
 import { Inspector, type InspectorActions } from "./Inspector";
+import { dropTracksOf, type DropTarget, type LibraryItem } from "./library";
+import { LibraryPanel, libraryItemKey } from "./LibraryPanel";
 import {
+  addCue,
+  addScene,
+  addSfx,
   canDelete,
   canDuplicate,
   canSplitScene,
@@ -66,16 +80,23 @@ import {
   deleteSelection,
   duplicateSelection,
   isCueSel,
+  newCueDuration,
+  newFootageScene,
+  newImageScene,
   normalizeTimeline,
+  sceneIdFromFile,
   sceneIndexById,
+  sceneInsertIndexAt,
+  setMusic,
   splitAtPlayhead,
+  type NewCue,
   type Selection,
 } from "./ops";
 import { createPlaybackStore } from "./playback";
 import { PreviewPlayer, type PlayerRef } from "./PreviewPlayer";
 import { ShortcutsModal } from "./ShortcutsModal";
 import { editorReducer, initialEditorState, isDirty, type SaveProblem } from "./store";
-import { TimelinePanel } from "./TimelinePanel";
+import { TimelinePanel, type AddCueKind } from "./TimelinePanel";
 import { Transport } from "./Transport";
 import { computeSceneSpans, totalFramesOf } from "./timing";
 
@@ -84,8 +105,15 @@ const AUTOSAVE_MS = 700;
 /** Tải lại timeline tối đa một lần mỗi khoảng này khi AI đang ghi file */
 const REFETCH_THROTTLE_MS = 1500;
 const TIMELINE_H_KEY = "aiev-editor-timeline-h";
-const TIMELINE_H_DEFAULT = 348;
+/**
+ * Vừa khít 7 track (32px) + thước + thanh tiêu đề - không cuộn dọc mà cũng
+ * không thừa chỗ: mỗi pixel bớt ở đây là trình phát (khung dọc 9:16 bị giới hạn
+ * bởi CHIỀU CAO) to thêm.
+ */
+const TIMELINE_H_DEFAULT = 304;
 const TIMELINE_H_MIN = 180;
+/** Cột Thư viện gấp/mở - nhớ theo trình duyệt (chỉ là tiện ích, mất thì về mở) */
+const LIBRARY_KEY = "aiev-editor-library";
 /** Nhãn lịch sử phiên bản cho mọi lần tự lưu (server gộp các PUT cùng nhãn trong 10s) */
 const SAVE_LABEL = "editor";
 /** Tool của agent có thể đã ghi meta.json → tải lại timeline */
@@ -154,7 +182,7 @@ interface RenderProblem {
 }
 
 export function VideoEditor({ projectId }: { projectId: string }) {
-  const { t } = useT();
+  const { t, tf } = useT();
   const router = useRouter();
   const { resyncTick } = useEvents();
 
@@ -171,9 +199,21 @@ export function VideoEditor({ projectId }: { projectId: string }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [timelineHeight, setTimelineHeight] = useState(TIMELINE_H_DEFAULT);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [libraryCollapsed, setLibraryCollapsed] = useState(false);
+  /** Món thư viện đang được thêm (chép file vào project / đo độ dài) */
+  const [libraryBusy, setLibraryBusy] = useState<{ key: string; name: string; importing: boolean } | null>(null);
+  const [libraryError, setLibraryError] = useState<{ message: string; detail?: string } | null>(null);
+  /** Tăng = cột Thư viện tải lại danh sách file của project (vừa chép file mới vào) */
+  const [assetsTick, setAssetsTick] = useState(0);
+  /** Chờ xác nhận thay nhạc nền đang có */
+  const [pendingMusic, setPendingMusic] = useState<LibraryItem | null>(null);
+  const [exportProblem, setExportProblem] = useState<{ message: string; detail?: string } | null>(null);
 
   const playback = useMemo(() => createPlaybackStore(), []);
   const playerRef = useRef<PlayerRef | null>(null);
+  const libraryBusyRef = useRef(false);
+  const pendingTargetRef = useRef<DropTarget | null>(null);
 
   // Nguồn sự thật ĐỒNG BỘ cho lượt lưu: state của reducer chỉ cập nhật ở lượt
   // render sau, còn hai lượt lưu nối nhau thì cần version mới NGAY.
@@ -600,6 +640,243 @@ export function VideoEditor({ projectId }: { projectId: string }) {
     if (!readOnlyRef.current) dispatch({ type: "redo" });
   }, []);
 
+  // ================================================================ thêm tại playhead
+
+  const addCueAtPlayhead = useCallback(
+    (kind: AddCueKind) => {
+      const s = stateRef.current;
+      if (!s.timeline || readOnlyRef.current) return;
+      const frame = playback.getFrame();
+      const cue: NewCue =
+        kind === "overlay"
+          ? { kind, text: t("editor.add.highlight-text") }
+          : kind === "subtitle"
+            ? { kind, text: t("editor.add.subtitle-text") }
+            : { kind, word: t("editor.caption.new-word") };
+      const result = addCue(s.timeline, cue, frame, newCueDuration(frame, totalRef.current, fps));
+      if (result.timeline === s.timeline) return;
+      edit(() => result.timeline, { selection: result.selection });
+    },
+    [edit, fps, playback, t],
+  );
+
+  // ================================================================ thư viện
+
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem(LIBRARY_KEY) === "collapsed") setLibraryCollapsed(true);
+    } catch {
+      // localStorage bị chặn - cột mở như mặc định
+    }
+  }, []);
+
+  const toggleLibrary = useCallback((collapsed: boolean) => {
+    setLibraryCollapsed(collapsed);
+    try {
+      window.localStorage.setItem(LIBRARY_KEY, collapsed ? "collapsed" : "open");
+    } catch {
+      // không nhớ được - vẫn gấp/mở cho phiên này
+    }
+  }, []);
+
+  /** Ghi thông số file vừa thêm vào `preview.media` - trim/khối sfx biết độ dài ngay, không chờ tải lại. */
+  const rememberMedia = useCallback((rel: string, media: TimelineMediaInfo) => {
+    setInfo((prev) => {
+      if (!prev || prev.preview.media[rel]) return prev;
+      return { ...prev, preview: { ...prev.preview, media: { ...prev.preview.media, [rel]: media } } };
+    });
+  }, []);
+
+  const measure = useCallback(
+    async (rel: string): Promise<number | null> => {
+      const known = info?.preview.media[rel]?.durationSec;
+      if (typeof known === "number") return known;
+      try {
+        const media = await getMediaInfo(projectId, rel);
+        rememberMedia(rel, media);
+        return media.durationSec;
+      } catch {
+        return null;
+      }
+    },
+    [info, projectId, rememberMedia],
+  );
+
+  /** Chép một file thư viện chung vào project (Remotion chỉ stage file trong project). */
+  const importFromLibrary = useCallback(
+    async (kind: "sfx" | "music", file: string): Promise<string> => {
+      const res = await importLibraryFile(projectId, kind, file);
+      rememberMedia(res.relPath, { durationSec: res.durationSec });
+      setAssetsTick((n) => n + 1);
+      return res.relPath;
+    },
+    [projectId, rememberMedia],
+  );
+
+  /**
+   * Thêm một món thư viện vào timeline - từ thả chuột (`target` là chỗ thả) hoặc
+   * nút "+" (không có target: tại playhead, track mặc định của món đó).
+   * `confirmed` = người dùng đã đồng ý thay nhạc nền đang có.
+   */
+  const addLibraryItem = useCallback(
+    async (item: LibraryItem, target?: DropTarget, confirmed = false) => {
+      const s = stateRef.current;
+      if (!s.timeline || readOnlyRef.current || libraryBusyRef.current) return;
+      const track = target?.track ?? dropTracksOf(item)[0];
+      const frame = target?.frame ?? playback.getFrame();
+      const sceneIndex =
+        target?.sceneIndex ?? sceneInsertIndexAt(computeSceneSpans(s.timeline.scenes, fps), frame);
+
+      // Thay nhạc nền đang có: hỏi trước (trước cả khi chép file vào project)
+      const musicFile = item.source === "project" ? item.relPath : item.source === "music" ? item.file : null;
+      if (track === "music" && !confirmed && s.timeline.audio.music && musicFile) {
+        const cur = s.timeline.audio.music.file;
+        const same = item.source === "project" ? cur === item.relPath : cur.split("/").pop() === item.file;
+        if (!same) {
+          pendingTargetRef.current = target ?? null;
+          setPendingMusic(item);
+          return;
+        }
+      }
+
+      const key = libraryItemKey(item);
+      setLibraryError(null);
+      setLibraryBusy({ key, name: item.name, importing: item.source !== "project" });
+      libraryBusyRef.current = true;
+      try {
+        if (track === "scene" && item.source === "project" && item.kind !== "audio") {
+          const rel = item.relPath;
+          const scene =
+            item.kind === "video"
+              ? newFootageScene("", rel, await measure(rel), fps)
+              : newImageScene("", rel, fps);
+          const latest = stateRef.current.timeline;
+          if (!latest || readOnlyRef.current) return;
+          const id = sceneIdFromFile(latest.scenes, rel);
+          edit((tl) => addScene(tl, sceneIndex, { ...scene, id }), { selection: { kind: "scene", id } });
+          return;
+        }
+        if (track === "sfx" && (item.source === "sfx" || (item.source === "project" && item.kind === "audio"))) {
+          let rel: string;
+          if (item.source === "project") {
+            rel = item.relPath;
+            await measure(rel);
+          } else {
+            rel = await importFromLibrary("sfx", item.file);
+          }
+          const latest = stateRef.current.timeline;
+          if (!latest || readOnlyRef.current) return;
+          const result = addSfx(latest, rel, frame);
+          edit(() => result.timeline, { selection: result.selection });
+          return;
+        }
+        if (track === "music" && musicFile) {
+          const rel = item.source === "music" ? await importFromLibrary("music", item.file) : musicFile;
+          if (readOnlyRef.current) return;
+          edit((tl) => setMusic(tl, rel), { selection: { kind: "music" } });
+        }
+      } catch (err) {
+        setLibraryError({
+          message: tf("editor.library.add-error", { name: item.name }),
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      } finally {
+        libraryBusyRef.current = false;
+        setLibraryBusy(null);
+      }
+    },
+    [edit, fps, importFromLibrary, measure, playback, tf],
+  );
+
+  const confirmMusic = useCallback(() => {
+    const item = pendingMusic;
+    const target = pendingTargetRef.current;
+    setPendingMusic(null);
+    pendingTargetRef.current = null;
+    if (item) void addLibraryItem(item, target ?? undefined, true);
+  }, [pendingMusic, addLibraryItem]);
+
+  // ================================================================ lịch sử phiên bản
+
+  const restoreRevision = useCallback(
+    async (rev: TimelineRevision): Promise<RestoreOutcome> => {
+      if (readOnlyRef.current) {
+        return { ok: false, message: t("editor.history.readonly"), reload: false };
+      }
+      // Thay đổi chưa lưu phải lên server trước: server chụp bản hiện tại vào
+      // lịch sử rồi mới ghi đè, nên chúng vẫn khôi phục lại được
+      if (!(await flushSave())) {
+        return { ok: false, message: t("editor.history.save-first"), reload: false };
+      }
+      const base = versionRef.current;
+      if (!base) return { ok: false, message: t("editor.history.error"), reload: true };
+      try {
+        const res = await restoreTimelineRevision(projectId, rev.rev, base);
+        // Như loadLatest: version ref TRƯỚC rồi mới nạp; saveCount đổi để lượt
+        // tải đang bay về (có thể là bản cũ hơn) tự bỏ kết quả và tải lại
+        saveCountRef.current += 1;
+        versionRef.current = res.version;
+        savedRevisionRef.current = stateRef.current.revision;
+        dispatch({ type: "loaded", version: res.version, timeline: normalizeTimeline(res.timeline) });
+        // Bản khôi phục có thể tham chiếu file khác - lấy lại thông số xem trước
+        requestRefetch();
+        setNotice(tf("editor.history.restored", { time: formatDateTime(rev.createdAt) }));
+        return { ok: true };
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        if (timelineConflictOf(err)) {
+          // AI/tab khác vừa ghi: nạp bản mới vào editor rồi để người dùng chọn lại
+          void loadRef.current();
+          return { ok: false, message: t("editor.history.conflict"), detail, reload: true };
+        }
+        if (err instanceof ApiError && err.code === "AGENT_BUSY") {
+          const sessionId = typeof err.data.sessionId === "string" ? err.data.sessionId : null;
+          if (sessionId) projectSessions.current.add(sessionId);
+          setLock((l) => (l ? { ...l, agentBusy: true, sessionId } : l));
+          return { ok: false, message: t("editor.history.agent-busy"), detail, reload: false };
+        }
+        if (err instanceof ApiError && err.status === 404) {
+          return { ok: false, message: t("editor.history.gone"), detail, reload: true };
+        }
+        return { ok: false, message: t("editor.history.error"), detail, reload: false };
+      }
+    },
+    [flushSave, projectId, requestRefetch, t, tf],
+  );
+
+  // ================================================================ xuất XML
+
+  const exportXml = useCallback(async () => {
+    setExportProblem(null);
+    // XML dựng từ meta.json trên server - thay đổi chưa lưu phải lên trước
+    if (!(await flushSave())) {
+      setExportProblem({ message: t("editor.export.save-first") });
+      return;
+    }
+    try {
+      const res = await fetch(timelineExportUrl(projectId), { credentials: "same-origin" });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status}${text ? `: ${text.slice(0, 500)}` : ""}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${projectId}.xml`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      setNotice(t("editor.export.done"));
+    } catch (err) {
+      setExportProblem({
+        message: t("editor.export.error"),
+        detail: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }, [flushSave, projectId, t]);
+
   // ================================================================ phím tắt
 
   useEffect(() => {
@@ -758,7 +1035,14 @@ export function VideoEditor({ projectId }: { projectId: string }) {
 
   const menuItems = useMemo<EditorMenuItem[]>(
     () => [
-      // GIAI ĐOẠN 3: thêm "Lịch sử phiên bản", "Xuất XML (Premiere/DaVinci)"… vào đây
+      { id: "history", label: t("editor.menu.history"), icon: History, onSelect: () => setHistoryOpen(true) },
+      {
+        id: "export-xml",
+        label: t("editor.menu.export-xml"),
+        hint: t("editor.menu.export-xml-hint"),
+        icon: FileDown,
+        onSelect: () => void exportXml(),
+      },
       { id: "shortcuts", label: t("editor.menu.shortcuts"), icon: Keyboard, onSelect: () => setShortcutsOpen(true) },
       {
         id: "project",
@@ -767,7 +1051,7 @@ export function VideoEditor({ projectId }: { projectId: string }) {
         onSelect: () => router.push(`/projects/${encodeURIComponent(projectId)}`),
       },
     ],
-    [t, router, projectId],
+    [t, router, projectId, exportXml],
   );
 
   const onSessionStarted = useCallback(
@@ -775,8 +1059,12 @@ export function VideoEditor({ projectId }: { projectId: string }) {
       projectSessions.current.add(id);
       foreignSessions.current.delete(id);
       onProjectAgentEvent("start", id, undefined);
+      // Lượt AI có thể đã kết thúc trước khi 202 về (lỗi ngay ở bước đầu) - khi đó
+      // SSE done đã trôi qua lúc phiên còn chưa được nhận diện; hỏi lại server
+      // để khóa chỉ đọc không kẹt mãi
+      requestRefetch();
     },
-    [onProjectAgentEvent],
+    [onProjectAgentEvent, requestRefetch],
   );
 
   const sel = state.selection;
@@ -966,9 +1254,45 @@ export function VideoEditor({ projectId }: { projectId: string }) {
         )}
 
         {showRenderStale && <Banner tone="info" message={t("editor.banner.render-stale")} />}
+        {libraryBusy?.importing && (
+          <Banner tone="muted" message={tf("editor.library.importing", { name: libraryBusy.name })}>
+            <div className="progress-indeterminate mt-2" aria-hidden="true" />
+          </Banner>
+        )}
+        {libraryError && (
+          <ErrorBanner
+            message={libraryError.message}
+            detail={libraryError.detail}
+            actions={
+              <Button variant="secondary" small onClick={() => setLibraryError(null)}>
+                {t("common.close")}
+              </Button>
+            }
+          />
+        )}
+        {exportProblem && (
+          <ErrorBanner
+            message={exportProblem.message}
+            detail={exportProblem.detail}
+            actions={
+              <Button variant="secondary" small onClick={() => setExportProblem(null)}>
+                {t("common.close")}
+              </Button>
+            }
+          />
+        )}
         {notice && <Banner tone="muted" message={notice} />}
 
-        <div className="editor-main">
+        <div className="editor-main" data-library={libraryCollapsed ? "collapsed" : "open"}>
+          <LibraryPanel
+            projectId={projectId}
+            collapsed={libraryCollapsed}
+            onCollapsedChange={toggleLibrary}
+            readOnly={readOnly}
+            busyKey={libraryBusy?.key ?? null}
+            refreshKey={assetsTick}
+            onAdd={(item) => void addLibraryItem(item)}
+          />
           <div className="editor-center">
             <div className="editor-stage">
               {timeline.scenes.length > 0 ? (
@@ -1032,10 +1356,41 @@ export function VideoEditor({ projectId }: { projectId: string }) {
           totalFrames={totalFrames}
           preview={info.preview}
           height={timelineHeight}
+          onLibraryDrop={(item, target) => void addLibraryItem(item, target)}
+          onAddCue={addCueAtPlayhead}
         />
 
         <EditorChat projectId={projectId} onSessionStarted={onSessionStarted} beforeSend={flushSave} />
         <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+        <HistoryModal
+          open={historyOpen}
+          onClose={() => setHistoryOpen(false)}
+          projectId={projectId}
+          currentVersion={state.version}
+          readOnly={readOnly}
+          onRestore={restoreRevision}
+        />
+        <Modal
+          title={t("editor.music.replace-title")}
+          open={pendingMusic !== null}
+          onClose={() => setPendingMusic(null)}
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setPendingMusic(null)}>
+                {t("common.cancel")}
+              </Button>
+              <Button onClick={confirmMusic}>{t("editor.music.replace")}</Button>
+            </>
+          }
+        >
+          <p className="text-sm">
+            {tf("editor.music.replace-body", {
+              current: (timeline.audio.music?.file ?? "").split("/").pop() ?? "",
+              next: pendingMusic?.name ?? "",
+            })}
+          </p>
+          <p className="text-meta text-[var(--text-muted)]">{t("editor.music.replace-note")}</p>
+        </Modal>
       </div>
     </EditorContext.Provider>
   );

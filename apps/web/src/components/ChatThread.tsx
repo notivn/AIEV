@@ -489,6 +489,8 @@ export function ChatThread({
     setRunning(true);
     setStatus("running");
     setJustFailed(false);
+    // Mốc lượt chạy TRƯỚC khi gửi (giờ server) - để biết lượt mới đã thật sự bắt đầu chưa
+    const runStartedBefore = sessionInfo?.runStartedAt ?? null;
     try {
       const current = activeIdRef.current;
       // model/effort chỉ gửi khi TẠO session mới - session cũ giữ model đã lưu
@@ -505,6 +507,7 @@ export function ChatThread({
         activeIdRef.current = res.sessionId;
         onSessionCreated?.(res.sessionId);
       }
+      void reconcileAfterSend(res.sessionId, runStartedBefore, message);
     } catch (e) {
       // Gửi thất bại: gỡ bubble optimistic + trả lại nội dung vào ô nhập (không mất chữ đã gõ)
       setMessages((m) => m.slice(0, -1));
@@ -513,6 +516,43 @@ export function ChatThread({
       setStatus(null);
       setAgentError(e instanceof Error ? e.message : String(e));
     }
+  }
+
+  /**
+   * Đối chiếu MỘT lần với trạng thái thật của phiên sau khi lệnh gửi trả về.
+   *
+   * Server trả 202 rồi mới chạy agent, nhưng agent có thể hỏng ngay ở bước đầu
+   * (chưa đăng nhập Claude, phiên đang bận…) và bắn SSE error/done TRƯỚC khi 202
+   * về tới đây. Lúc đó activeIdRef còn là null (phiên mới) nên bộ lọc SSE bỏ qua
+   * các event ấy, và panel kẹt "đang chạy" mãi. Phần đồng bộ của runAgent chạy
+   * xong trước khi response kịp đi (đặt status "running" hoặc bắn lỗi), nên ở
+   * thời điểm này server đã biết chắc: còn chạy, đã xong, hay chưa từng bắt đầu.
+   */
+  async function reconcileAfterSend(id: string, runStartedBefore: string | null, sent: string) {
+    let found: ChatSession | undefined;
+    try {
+      found = (await getChatSessions(projectId)).find((s) => s.sessionId === id);
+    } catch {
+      return; // không hỏi được - SSE (hoặc lần nối lại sau) vẫn còn đó
+    }
+    if (!found || activeIdRef.current !== id || found.status === "running") return;
+    const started = found.runStartedAt !== null && found.runStartedAt !== runStartedBefore;
+    setSessionInfo(found);
+    flushStream();
+    setRunning(false);
+    setStartedAt(null);
+    if (started) {
+      // Lượt này chạy và đã kết thúc trước khi 202 về - hiện đúng kết cục
+      setStatus(found.status);
+      setJustFailed(found.status === "error");
+      return;
+    }
+    // Lượt chưa từng bắt đầu (server không lưu tin nhắn) - như gửi thất bại:
+    // gỡ bong bóng vừa thêm, trả chữ về ô nhập để gửi lại được
+    setMessages((m) => (m.length > 0 && m[m.length - 1].role === "user" ? m.slice(0, -1) : m));
+    setInput((cur) => cur || sent);
+    setStatus(null);
+    setAgentError((e) => e ?? t("chat.run-not-started"));
   }
 
   async function onInterrupt() {

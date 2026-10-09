@@ -31,9 +31,14 @@ export function Transport({
   const playing = useIsPlaying(playback);
 
   return (
-    <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
+    <div className="editor-transport flex shrink-0 flex-wrap items-center justify-between gap-2">
       <div className="flex items-center gap-1" role="group" aria-label={t("editor.transport")}>
-        <IconButton label={t("editor.transport.start")} disabled={disabled} onClick={() => seek(0)}>
+        <IconButton
+          label={t("editor.transport.start")}
+          disabled={disabled}
+          onClick={() => seek(0)}
+          data-optional=""
+        >
           <SkipBack size={16} strokeWidth={1.75} />
         </IconButton>
         <IconButton label={t("editor.transport.prev-frame")} disabled={disabled} onClick={() => onStep(-1)}>
@@ -54,6 +59,7 @@ export function Transport({
           label={t("editor.transport.end")}
           disabled={disabled}
           onClick={() => seek(Math.max(0, totalFrames - 1))}
+          data-optional=""
         >
           <SkipForward size={16} strokeWidth={1.75} />
         </IconButton>
