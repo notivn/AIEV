@@ -14,6 +14,7 @@ Drop in a clip, briefly describe what you want, click **"Start editing with AI"*
 | | |
 |---|---|
 | 🎬 **AI video editing** | Claude analyzes the source → builds HyperFrames scenes → assembles with Remotion → MP4. Draft first, final later, every frame verified. |
+| 🎞️ **Video editor** | Preview the edit instantly in the browser (the real Remotion composition, no render needed) and change it on a timeline: reorder/trim/split scenes, edit karaoke words, subtitles, highlight cards, sound effects and music, or just tell the AI in the side chat. Every change is saved to the project and goes into the next render; version history lets you roll back, even to before the AI's last edit. |
 | 🎨 **Style Design** | Multiple brand kits (colors, fonts, logo, tone, gradient/liquid-glass effects) - every output follows the selected style 100%. Just type a font name and it downloads from Google Fonts (full Vietnamese diacritics). |
 | 🖼️ **AI image generation** | Gemini paints the background (no text) → Remotion places titles/logo/figures per the Style Design - Vietnamese text is never misspelled. |
 | ✨ **In-video AI illustrations** | Claude picks key moments, Gemini draws style-matched illustrations and they're placed at exactly the right time (~$0.05/image). |
@@ -147,6 +148,17 @@ Manual dev run: `npm install` then `npm run dev`.
 4. **Start editing with AI** - Claude transcribes the clip, plans the edit, builds HyperFrames scenes, generates the illustrations, wires sound effects and assembles a **draft**. Progress streams live on the project page; all renders go through the **Render queue**.
 5. **Review and finish** - watch the draft right on the project page, ask for changes in the review chat ("make the hook bigger", "cut the intro"...), then run **QC** and the **final render**. The MP4 lands in `outputs/`, together with an auto-generated thumbnail and a publish pack (title, description, hashtags).
 
+### The video editor
+
+Open a project and click **Open editor** (available once the project has scenes).
+
+- **Preview** - the player runs the exact composition the render uses, so what you see is what the render produces (footage plays as normal browser video, so it is not frame-exact; the render is the source of truth). HyperFrames scenes show their latest draft or final render.
+- **Timeline** - tracks for video, highlight cards, karaoke, subtitles, sound effects, voice and music. Drag to move, drag an edge to trim, `S` splits at the playhead, `Delete` removes, `Ctrl/Cmd+Z` undoes. Press `?` for every shortcut.
+- **Inspector** - edit the selected item: in/out points, transitions, punch-in zoom, karaoke words and their emphasis, subtitle text, highlight text/tier/accent, volumes.
+- **Library** - drag project footage/images onto the video track, sound effects and music from the shared library onto their tracks.
+- **AI chat** - the side panel edits the same timeline ("move the second subtitle 0.5s earlier"); the preview updates as the AI writes. The editor is read-only while the AI works.
+- **Saving & rendering** - every change is saved automatically; if someone (or the AI) changed the project meanwhile you choose which version to keep. **Render draft / final** go through the render queue as usual. **History** restores earlier versions; **Export XML** opens the timeline in Premiere Pro or DaVinci Resolve.
+
 ### Text to video (article → video)
 
 **Text to video** → **New session**: paste a URL or raw text (the name is optional - it is taken from the article title). The pipeline runs in stages you can review between: **Extract** the article → **Script** - the AI rewrites it into a spoken script in chunks (set the target length in seconds, edit any chunk by hand) → **Voice** - pick the engine (**Gemini TTS** online or **VieNeu-TTS** on-device, including your cloned voices), the voice and the reading speed, with per-chunk preview → **Build** - the narration is synthesized and a video project is created and edited by the AI using the brief you configured. Setting an illustration density here is the easy way to keep a long article video visually alive.
@@ -247,7 +259,8 @@ Found a security problem? Do not open a public issue - follow [SECURITY.md](SECU
 
 > Note on dependencies: this project's own license is MIT, but bundled tools keep their own.
 > Remotion in particular is free for individuals and companies of up to 3 people; beyond that you
-> need a [Company License](https://remotion.pro). Claude and Gemini usage is billed to your own account.
+> need a [Company License](https://remotion.pro) - and the video editor embeds the Remotion Player, which
+> Remotion licenses under its "Automators" tier for such companies. Claude and Gemini usage is billed to your own account.
 >
 ### Assets: this repo ships code, not media
 

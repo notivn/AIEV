@@ -14,6 +14,7 @@
 | | |
 |---|---|
 | 🎬 **Edit video bằng AI** | Claude tự phân tích source → dựng scene HyperFrames → lắp ráp Remotion → MP4. Draft trước, final sau, verify từng frame. |
+| 🎞️ **Trình chỉnh sửa video** | Xem trước bản dựng ngay trong trình duyệt (chạy đúng composition Remotion, không cần render) và sửa trên timeline: đổi thứ tự/cắt/tách scene, sửa chữ karaoke, phụ đề, thẻ highlight, sound effect, nhạc nền - hoặc nhờ AI trong khung chat bên cạnh. Mọi thay đổi được lưu vào project và vào lần render kế tiếp; lịch sử phiên bản cho phép quay lại, kể cả trước lần AI sửa gần nhất. |
 | 🎨 **Style Design** | Nhiều bộ nhận diện (màu, font, logo, tone, hiệu ứng gradient/liquid glass) - sản phẩm tuân thủ 100% style đã chọn. Font chỉ cần gõ tên, tự tải từ Google Fonts (đủ dấu tiếng Việt). |
 | 🖼️ **Tạo ảnh AI** | Gemini vẽ nền (không chữ) → Remotion đặt tiêu đề/logo/số liệu theo Style Design - chữ tiếng Việt không bao giờ sai chính tả. |
 | ✨ **Ảnh minh họa trong video** | Claude chọn ý chính, Gemini vẽ minh họa đồng bộ style rồi ghép đúng thời điểm (~$0.05/ảnh). |
@@ -146,6 +147,17 @@ Chạy dev thủ công: `npm install` rồi `npm run dev`.
 4. **Bắt đầu edit bằng AI** - Claude transcribe clip, lên kế hoạch dựng, tạo scene HyperFrames, sinh ảnh minh họa, đi sound effect rồi lắp thành bản **draft**. Tiến trình chạy realtime ngay trên trang project; mọi render đều qua **Render queue**.
 5. **Duyệt và hoàn thiện** - xem draft ngay trên trang project, góp ý qua khung chat duyệt ("phóng to hook lên", "cắt bớt intro"...), rồi chạy **QC** và **render final**. File MP4 nằm trong `outputs/`, kèm thumbnail tự tạo và bộ publish (tiêu đề, mô tả, hashtag).
 
+### Trình chỉnh sửa video
+
+Mở một project rồi bấm **Mở trình chỉnh sửa** (có khi project đã có scene).
+
+- **Xem trước** - trình phát chạy đúng composition mà bước render dùng, nên thấy gì thì render ra nấy (footage phát bằng video của trình duyệt nên không chính xác từng frame; bản render mới là chuẩn). Scene HyperFrames hiện bản render draft/final mới nhất.
+- **Timeline** - các track video, thẻ highlight, karaoke, phụ đề, sound effect, giọng đọc, nhạc nền. Kéo để dời, kéo mép để cắt, `S` tách tại playhead, `Delete` xóa, `Ctrl/Cmd+Z` hoàn tác. Bấm `?` để xem mọi phím tắt.
+- **Inspector** - sửa phần tử đang chọn: điểm vào/ra, chuyển cảnh, zoom nhấn, từng chữ karaoke và từ nhấn, chữ phụ đề, nội dung/cấp/màu nhấn của highlight, âm lượng.
+- **Thư viện** - kéo footage/ảnh của project vào track video, sound effect và nhạc từ thư viện chung vào track tương ứng.
+- **Chat AI** - khung bên phải sửa cùng timeline đó ("dời phụ đề thứ hai sớm 0,5 giây"); trình phát cập nhật ngay khi AI ghi. Trình chỉnh sửa khóa ở chế độ chỉ xem trong lúc AI làm.
+- **Lưu & render** - mọi thay đổi tự lưu; nếu trong lúc đó project bị sửa ở nơi khác (hoặc bởi AI), bạn chọn giữ bản nào. **Render draft / final** đi qua render queue như thường. **Lịch sử** khôi phục phiên bản cũ; **Xuất XML** mở timeline trong Premiere Pro hoặc DaVinci Resolve.
+
 ### Text to video (bài viết → video)
 
 **Text to video** → **Tạo phiên**: dán URL hoặc văn bản (tên phiên bỏ trống cũng được - hệ thống lấy theo tiêu đề bài). Pipeline chạy theo từng bước, bước nào cũng duyệt lại được: **Trích bài** → **Kịch bản** - AI viết lại thành văn nói chia đoạn (đặt thời lượng mục tiêu theo giây, sửa tay từng đoạn) → **Giọng đọc** - chọn engine (**Gemini TTS** online hoặc **VieNeu-TTS** chạy trên máy, gồm cả giọng nhân bản của bạn), giọng và tốc độ đọc, nghe thử từng đoạn → **Build** - hệ thống dựng giọng đọc, tạo video project rồi AI tự edit theo Kịch bản edit đã cấu hình. Video bài viết dài nên đặt mật độ ảnh minh họa để đổi nền liên tục cho đỡ nhàm.
@@ -246,7 +258,8 @@ Phát hiện lỗ hổng bảo mật? Đừng mở issue công khai, làm theo [
 
 > Lưu ý về phụ thuộc: dự án này cấp phép MIT, nhưng các công cụ đi kèm giữ giấy phép riêng.
 > Remotion miễn phí cho cá nhân và công ty tối đa 3 người; vượt mức đó cần
-> [Company License](https://remotion.pro). Chi phí Claude và Gemini tính vào tài khoản của bạn.
+> [Company License](https://remotion.pro) - và trình chỉnh sửa video có nhúng Remotion Player, phần mà
+> Remotion cấp phép theo gói "Automators" cho các công ty đó. Chi phí Claude và Gemini tính vào tài khoản của bạn.
 >
 ### Asset: repo ship code, không ship media
 
