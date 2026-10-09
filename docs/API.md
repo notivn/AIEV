@@ -217,6 +217,7 @@ PUT  /api/projects/:id/assets/:file/grade              { preset?, adjust? } → 
 
 ```
 POST /api/projects/:id/edit  { extraNotes?: string, model?: string, effort?: string } → 202 { sessionId }
+                             → 409 SESSION_BUSY khi project đã có phiên AI đang chạy
 ```
 
 `model`/`effort` (400 nếu giá trị không hợp lệ) lưu vào chat session - mọi lượt chạy sau của phiên dùng lựa chọn đó.
@@ -238,7 +239,7 @@ Provider = { id: "claude"|"gemini", label, connected: boolean,
   models = các model Claude khả dụng cho agent edit/chat. Chọn model gửi qua:
   `POST /api/chat { ..., model? }` và `POST /api/projects/:id/edit { ..., model? }` —
   lưu vào chat_sessions.model, mọi lượt chạy sau của session dùng model đó.
-- gemini: connected khi có GEMINI_API_KEY/GOOGLE_API_KEY trong .env (GOOGLE_API_KEY thắng nếu có cả hai).
+- gemini: connected khi có GEMINI_API_KEY/GOOGLE_API_KEY trong .env (GOOGLE_API_KEY thắng nếu có cả hai; vì vậy PUT key gemini xóa luôn GOOGLE_API_KEY để key vừa dán có hiệu lực).
   Antigravity/gemini-cli chỉ được ghi nhận ở note (auth nội bộ IDE, không gọi API ảnh được). roles = ["image"].
 - `GET /api/providers/gemini/image-models` → [{ id, label }] — danh sách model tạo ảnh Gemini khả dụng.
 - `GET /api/providers/claude/models` → { source: "anthropic"|"static", models: [{ id, label }] } — danh sách model Claude live từ Anthropic Models API (cần ANTHROPIC_API_KEY, cache 10'); OAuth-only/lỗi → danh sách tĩnh đầy đủ.
@@ -520,7 +521,7 @@ POST   /api/translate-video/:id/dub-preview { index?, voice? } -> audio/wav (Đ�
                                       bỏ trống thì lấy giọng đã chốt / gán tự động cho người nói đó.
                                       Câu nghe thử đi qua ĐÚNG phép co giãn của bước dựng thật, nên
                                       nghe ra ngay là bản dịch có dài quá không.
-                                      Header: x-dub-voice, x-dub-natural (giây TTS đọc ra),
+                                      Header: x-dub-voice (encodeURIComponent), x-dub-natural (giây TTS đọc ra),
                                       x-dub-final (sau khi co), x-dub-source (độ dài câu gốc),
                                       x-dub-tempo, x-dub-clipped, x-dub-overflowed
                                       (400 NO_CUES / INVALID_CUE_INDEX / INVALID_VOICE;
@@ -732,6 +733,8 @@ level  = "natural"|"default"|"tight"  - thiếu thì lấy brief.autoCutLevel
 source = đường dẫn video nguồn, tính từ thư mục project ("assets/face.mp4") hoặc từ repo root;
          nằm ngoài project -> 400 PATH_OUTSIDE_PROJECT, không có file -> 404 TRIM_SOURCE_NOT_FOUND.
          Thiếu thì server tự chọn: assets/face.* -> file video LỚN NHẤT trong assets/ (bỏ qua *.cut.*)
+apply  -> 409 AUTO_CUT_DISABLED khi project TẮT "Tự động cắt ngắn video" (brief.autoCut = false);
+         analyze vẫn chạy vì chỉ đọc
 
 TrimAnalyzeResult = {
   source: relPath, transcript: relPath|null, guarded: boolean, note: string,

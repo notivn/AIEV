@@ -88,6 +88,17 @@ router.post("/:id/auto-trim/analyze", async (req, res) => {
 router.post("/:id/auto-trim/apply", (req, res) => {
   const id = req.params.id;
   assertProject(id);
+  // Công tắc "Tự động cắt ngắn video" là công tắc THẬT (CLAUDE.md 5.7): tắt thì
+  // prompt bảo agent không cắt, nhưng prompt chỉ là lời khuyên - chặn ở đây,
+  // TRƯỚC mọi tác dụng phụ. /analyze vẫn mở vì chỉ đọc.
+  if (!briefOf(readMeta(id)).autoCut) {
+    throw new HttpError(
+      409,
+      "AUTO_CUT_DISABLED",
+      `Project "${id}" đang TẮT "Tự động cắt ngắn video" - không cắt footage của video này. ` +
+        "Muốn cắt thì bật công tắc đó trong Kịch bản edit rồi chạy lại.",
+    );
+  }
   const body = (req.body ?? {}) as Record<string, unknown>;
   const level = levelOf(body, id);
   // Dò nguồn NGAY tại route (không để job phát hiện): sai đường dẫn thì phải

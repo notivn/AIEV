@@ -108,7 +108,34 @@ function mustRead(id: string): TranslateVideoMeta {
   if (!translateVideoExists(id)) {
     throw new HttpError(404, "NOT_FOUND", `Không tìm thấy phiên dịch "${id}"`);
   }
-  return readTranslateVideo(id);
+  return healStale(readTranslateVideo(id));
+}
+
+/** Phiên đang chạy /translate (đồng bộ, không có job) trong process NÀY */
+const translatingNow = new Set<string>();
+
+/**
+ * Trạng thái "đang chạy" chỉ được ghi lại bởi job/handler đang sống. Server chết
+ * giữa chừng (restart, tắt máy) thì không ai lùi nó về - phiên kẹt 409 BUSY mãi
+ * mãi, kể cả không xóa được. Nên mỗi lần đọc đều đối chiếu: không còn job nào
+ * chạy/chờ (và không phải /translate đang chạy) thì lùi về trạng thái CHẠY LẠI ĐƯỢC.
+ */
+function healStale(meta: TranslateVideoMeta): TranslateVideoMeta {
+  const stale =
+    ((meta.status === "transcribing" || meta.status === "rendering") &&
+      !db.hasActiveJobForProject(meta.id)) ||
+    (meta.status === "translating" && !translatingNow.has(meta.id));
+  if (!stale) return meta;
+  const status =
+    meta.status === "rendering" && meta.cues.length > 0
+      ? "translated"
+      : meta.transcriptFile
+        ? "transcribed"
+        : "draft";
+  return patchTranslateVideo(meta.id, {
+    status,
+    error: `Bước "${meta.status}" bị dừng giữa chừng (server khởi động lại) - chạy lại bước đó.`,
+  });
 }
 
 function uniqueId(name: string): string {
@@ -192,7 +219,7 @@ router.get("/stt-providers", (_req, res) => {
 
 // GET /api/translate-video -> TranslateVideoMeta[] (mới cập nhật trước)
 router.get("/", (_req, res) => {
-  res.json(scanTranslateVideos());
+  res.json(scanTranslateVideos().map(healStale));
 });
 
 // POST /api/translate-video { name? } -> 201 TranslateVideoMeta
@@ -574,6 +601,7 @@ router.post("/:id/translate", async (req, res) => {
   }
 
   patchTranslateVideo(meta.id, { status: "translating", error: null });
+  translatingNow.add(meta.id);
   try {
     const plain = input.map((c) => ({ start: c.start, end: c.end, text: c.text }));
     const twoLangs = wantsDub(meta.mode) && dubLangDiffers(meta);
@@ -667,6 +695,8 @@ router.post("/:id/translate", async (req, res) => {
       error: message,
     });
     throw err;
+  } finally {
+    translatingNow.delete(meta.id);
   }
 });
 
@@ -797,7 +827,9 @@ router.post("/:id/dub-preview", async (req, res) => {
     res.setHeader("content-length", String(wav.length));
     // Mỗi lần đọc ra một file khác (thời lượng lệch tới 28%) - cấm cache
     res.setHeader("cache-control", "no-store");
-    res.setHeader("x-dub-voice", voice);
+    // Tên giọng VieNeu có dấu ("Minh Đức") - header HTTP chỉ nhận Latin-1, đặt
+    // thẳng là Node ném ERR_INVALID_CHAR và trả 500 sau khi đã đọc TTS xong
+    res.setHeader("x-dub-voice", encodeURIComponent(voice));
     res.setHeader("x-dub-natural", naturalSec.toFixed(2));
     res.setHeader("x-dub-final", finalSec.toFixed(2));
     res.setHeader("x-dub-source", (cue.end - cue.start).toFixed(2));
@@ -845,7 +877,12 @@ router.post("/:id/render", async (req, res) => {
         "để AI dịch thêm bản cho phần lồng tiếng.",
     );
   }
-  if (wantsDub(meta.mode)) await assertDubEngineReady(meta);
+  if (wantsDub(meta.mode)) {
+    await assertDubEngineReady(meta);
+    // Dò engine mất vài giây: hai cú bấm nhanh cùng lọt qua assertNotBusy phía
+    // trên và xếp HAI job render (tính tiền TTS hai lần) - kiểm lại ngay trước khi xếp
+    assertNotBusy(mustRead(meta.id));
+  }
   res.status(202).json({ jobId: enqueueJob(meta.id, "render").id });
 });
 

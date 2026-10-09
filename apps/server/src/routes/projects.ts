@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Router } from "express";
-import { runAgent } from "../agent.js";
+import { isAgentRunning, runAgent } from "../agent.js";
 import {
   prepareEditSession,
   scaffoldProjectFiles,
@@ -454,6 +454,16 @@ router.post("/:id/edit", (req, res) => {
   }
   const extraNotes = typeof body.extraNotes === "string" ? body.extraNotes.trim() : "";
   const { model, effort } = parseModelEffort(body); // 400 nếu không hợp lệ
+
+  // Bấm "Edit bằng AI" hai lần = hai agent cùng sửa + render một project. Chặn
+  // như review/send đã chặn.
+  if (db.listChatSessions(id).some((s) => isAgentRunning(s.sessionId))) {
+    throw new HttpError(
+      409,
+      "SESSION_BUSY",
+      "Phiên AI của project đang chạy - đợi xong (hoặc dừng nó) rồi mới mở phiên mới",
+    );
+  }
 
   // Soạn prompt (brief + assets + sfx/nhạc + Style Design) và mở phiên goal='final'
   // - dùng chung với "cắt short"/"tái chế tỉ lệ" (xem childProject.ts)
