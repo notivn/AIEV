@@ -121,7 +121,7 @@ foreach ($port in 6868, 6869) {
 # 3. Cài dependencies mới (nếu có)
 Write-Host "[STEP] install"
 Write-Host "  -> npm install..." -ForegroundColor Cyan
-npm install --no-audit --no-fund
+npm install --include=dev --no-audit --no-fund
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  [LOI] npm install thất bại - xem start\update.log." -ForegroundColor Red
     Stop-UpdateLog

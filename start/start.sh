@@ -121,10 +121,23 @@ if $WEB_UP || $API_UP; then
   kill_ports
 fi
 
-# 3. Cài dependencies lần đầu
-if [ ! -d "$ROOT/node_modules" ]; then
-  step "Lần chạy đầu tiên - đang cài dependencies (vài phút)..."
-  npm install --no-audit --no-fund || { err "npm install thất bại - xem log phía trên."; exit 1; }
+# 3. Cài dependencies lần đầu - hoặc khi node_modules có mà thiếu công cụ build.
+#    Chỉ kiểm tra thư mục node_modules là chưa đủ: lần cài đầu bị ngắt giữa
+#    chừng để lại node_modules dở dang, và máy đặt NODE_ENV=production hoặc
+#    `npm config set omit dev` thì npm bỏ qua devDependencies - cả hai đều ra
+#    "tsc: command not found" ở bước build. `--include=dev` ép cài đủ
+#    devDependencies (typescript, tsx...) bất kể cấu hình npm của máy.
+MISSING_TOOLS=""
+for t in tsc next tsx remotion concurrently; do
+  [ -e "$ROOT/node_modules/.bin/$t" ] || MISSING_TOOLS="$MISSING_TOOLS $t"
+done
+if [ ! -d "$ROOT/node_modules" ] || [ -n "$MISSING_TOOLS" ]; then
+  if [ -d "$ROOT/node_modules" ]; then
+    step "Dependencies chưa cài đủ (thiếu:$MISSING_TOOLS) - đang cài lại (vài phút)..."
+  else
+    step "Lần chạy đầu tiên - đang cài dependencies (vài phút)..."
+  fi
+  npm install --include=dev --no-audit --no-fund || { err "npm install thất bại - xem log phía trên."; exit 1; }
   ok "Đã cài dependencies."
 fi
 

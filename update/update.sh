@@ -107,7 +107,7 @@ done
 # 3. Cài dependencies mới (nếu có)
 echo "[STEP] install"
 printf '  \033[36m-> npm install...\033[0m\n'
-npm install --no-audit --no-fund || { printf '  \033[31m[LOI] npm install thất bại - xem start/update.log.\033[0m\n'; exit 1; }
+npm install --include=dev --no-audit --no-fund || { printf '  \033[31m[LOI] npm install thất bại - xem start/update.log.\033[0m\n'; exit 1; }
 
 # 4. Khởi động lại - start.sh tự build phần code mới rồi mở trình duyệt
 printf '  \033[32m[OK] Đã cập nhật. Đang khởi động...\033[0m\n'

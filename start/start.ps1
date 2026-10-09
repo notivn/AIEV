@@ -106,10 +106,24 @@ if ($webUp -or $apiUp) {
     Stop-AievPorts
 }
 
-# 3. Cài dependencies lần đầu
-if (-not (Test-Path (Join-Path $root "node_modules"))) {
-    Write-Step "Lần chạy đầu tiên - đang cài dependencies (vài phút)..."
-    npm install --no-audit --no-fund
+# 3. Cài dependencies lần đầu - hoặc khi node_modules có mà thiếu công cụ build.
+#    Chỉ kiểm tra thư mục node_modules là chưa đủ: lần cài đầu bị ngắt giữa
+#    chừng (đóng cửa sổ, mất mạng, build better-sqlite3 lỗi) để lại một
+#    node_modules dở dang, và máy đặt NODE_ENV=production hoặc
+#    `npm config set omit dev` thì npm bỏ qua devDependencies - cả hai đều ra
+#    "'tsc' is not recognized" ở bước build. `--include=dev` ép cài đủ
+#    devDependencies (typescript, tsx...) bất kể cấu hình npm của máy.
+$binDir = Join-Path $root "node_modules\.bin"
+$missingTools = @("tsc", "next", "tsx", "remotion", "concurrently") | Where-Object {
+    -not (Test-Path (Join-Path $binDir "$_.cmd")) -and -not (Test-Path (Join-Path $binDir $_))
+}
+if (-not (Test-Path (Join-Path $root "node_modules")) -or $missingTools) {
+    if (Test-Path (Join-Path $root "node_modules")) {
+        Write-Step "Dependencies chưa cài đủ (thiếu: $($missingTools -join ', ')) - đang cài lại (vài phút)..."
+    } else {
+        Write-Step "Lần chạy đầu tiên - đang cài dependencies (vài phút)..."
+    }
+    npm install --include=dev --no-audit --no-fund
     if ($LASTEXITCODE -ne 0) { Write-Err "npm install thất bại - xem log phía trên."; exit 1 }
     Write-Ok "Đã cài dependencies."
 }
