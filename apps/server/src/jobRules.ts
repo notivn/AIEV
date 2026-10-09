@@ -75,11 +75,17 @@ export function assertVideoJobAllowed(
   }
 }
 
-/** Tạo job trong DB + đẩy SSE + xếp vào hàng đợi - trả shape Job của API */
+/**
+ * Tạo job trong DB + đẩy SSE + xếp vào hàng đợi - trả shape Job của API.
+ * `dependsOn`: id các job (cùng project, xếp TRƯỚC) phải "done" thì job này mới
+ * chạy - không thì nó failed ngay với lý do chỉ đích danh job hỏng (queue.ts).
+ * Đăng ký cùng lúc với enqueue: hàng đợi có thể bốc job chạy ngay trong lệnh này.
+ */
 export function enqueueJob(input: {
   projectId: string;
   type: db.JobType;
   sceneId?: string | null;
+  dependsOn?: string[];
 }): db.JobApi {
   const job = db.createJob({
     id: `job_${nanoid()}`,
@@ -89,6 +95,6 @@ export function enqueueJob(input: {
   });
   const api = db.jobToApi(job);
   broadcast("job", api);
-  queue.enqueue(job.id);
+  queue.enqueue(job.id, input.dependsOn);
   return api;
 }

@@ -466,13 +466,46 @@ export function validateTimelinePatch(patch: Obj, projectDir: string): TimelineI
 }
 
 /**
+ * Khóa tùy chọn của manifest mà `null` phải hiểu là "không có". zod của engine
+ * chỉ điền mặc định (`.default([])`, `.optional()`) cho UNDEFINED - gặp null là
+ * từ chối cả manifest, mà agent viết tay meta.json rất hay ghi `"captions": null`
+ * hay `"subtitleStyle": null` để nói "không dùng". Trình phát đã hiểu vậy
+ * (timelineForClient điền mặc định, PreviewPlayer dùng `??`), nên bản render
+ * cũng phải hiểu y hệt - không thì xem trước chạy mà bấm render thì chết.
+ * (`audio.music: null` và `audio.voice: null` thì zod nhận sẵn - giữ nguyên.)
+ */
+const NULL_AS_ABSENT_KEYS = ["audio", "captions", "subtitles", "subtitleStyle", "overlays"] as const;
+
+/**
+ * Xóa các khóa `null` ở trên (và `audio.sfx: null`) - SỬA TẠI CHỖ object truyền
+ * vào và trả lại chính nó. jobs/assemble.ts gọi trên bản sao props trước khi
+ * ghi props.resolved.json; validateTimelineForRender gọi trên bản sao nông để
+ * soi đúng thứ sẽ được render.
+ */
+export function dropNullOptionalKeys<T extends Obj>(m: T): T {
+  for (const key of NULL_AS_ABSENT_KEYS) {
+    if (m[key] === null) delete m[key];
+  }
+  if (isObj(m.audio) && m.audio.sfx === null) delete m.audio.sfx;
+  return m;
+}
+
+/**
  * Validate toàn bộ timeline đang trên đĩa trước khi xếp job render (POST
  * /editor/render): khóa thiếu = mặc định của engine, scenes phải có ít nhất 1.
  * Bắt lỗi ở đây rẻ hơn nhiều so với để Remotion chết sau khi đã render scene.
+ *
+ * Soi bản ĐÃ chuẩn hóa null giống hệt jobs/assemble.ts (dropNullOptionalKeys):
+ * null ở khóa tùy chọn được assemble xóa đi nên ở đây cũng là "thiếu", còn
+ * null ở chỗ khác (vd `scenes: null`, `audio.sfx[0]: null`) vẫn báo lỗi đúng chỗ.
  */
 export function validateTimelineForRender(meta: ProjectMeta, projectDir: string): TimelineIssue[] {
   const is = new Issues(projectDir);
-  const raw = rawTimelineOf(meta);
+  const normalized = dropNullOptionalKeys({
+    ...(meta as Obj),
+    audio: isObj(meta.audio) ? { ...(meta.audio as Obj) } : meta.audio,
+  });
+  const raw = rawTimelineOf(normalized as ProjectMeta);
   if (raw.scenes === null || (Array.isArray(raw.scenes) && raw.scenes.length === 0)) {
     is.add("scenes", "cần ít nhất 1 scene để render");
   } else {
@@ -658,7 +691,8 @@ export function listRevisions(id: string): RevisionSummary[] {
 }
 
 /**
- * Chụp timeline HIỆN TẠI trên đĩa vào `.history/<rev>.json`, giữ 100 bản mới nhất.
+ * Chụp timeline HIỆN TẠI trên đĩa vào `.history/<rev>.json`, giữ 100 bản mới nhất
+ * (20 bản ai-before/ai-after mới nhất luôn được giữ - xem pruneHistory).
  * Trả về null khi bỏ qua: bản mới nhất đã cùng version (trạng thái đó đã khôi
  * phục được, chụp nữa chỉ tốn chỗ - vd nhiều lượt AI liên tiếp không sửa gì),
  * hoặc đang trong cửa sổ gộp của tự lưu editor (EDITOR_COALESCE_MS).
@@ -695,10 +729,33 @@ export function snapshotTimeline(
   return { rev: rev.rev, createdAt: rev.createdAt, label, source, version };
 }
 
+/**
+ * Số bản "ai-before"/"ai-after" mới nhất KHÔNG BAO GIỜ bị dọn. Một buổi kéo thả
+ * dài trong editor đẻ đủ 100 bản "editor" (mỗi bản cách nhau > EDITOR_COALESCE_MS)
+ * là đủ đẩy rơi điểm khôi phục "trước khi AI sửa" - đúng thứ lịch sử sinh ra để
+ * giữ. Nên dọn theo hai ngân sách: tổng vẫn tối đa MAX_REVISIONS, nhưng chỉ xóa
+ * bản cũ nhất NGOÀI nhóm được giữ này.
+ */
+const KEEP_AI_REVISIONS = 20;
+
 function pruneHistory(id: string): void {
-  const files = revFiles(id);
+  const files = revFiles(id); // cũ nhất trước
+  const excess = files.length - MAX_REVISIONS;
+  if (excess <= 0) return;
   const dir = historyDirOf(id);
-  for (const f of files.slice(0, Math.max(0, files.length - MAX_REVISIONS))) {
+  // listRevisions đọc qua summaryCache - không parse lại cả trăm file mỗi lần chụp
+  const sourceOf = new Map(listRevisions(id).map((r) => [`${r.rev}.json`, r.source]));
+  const protectedAi = new Set(
+    files
+      .filter((f) => {
+        const s = sourceOf.get(f);
+        return s === "ai-before" || s === "ai-after";
+      })
+      .slice(-KEEP_AI_REVISIONS),
+  );
+  // File hỏng (không đọc được source) không được bảo vệ - dọn trước như mọi bản thường
+  const victims = files.filter((f) => !protectedAi.has(f)).slice(0, excess);
+  for (const f of victims) {
     const abs = path.join(dir, f);
     try {
       fs.rmSync(abs, { force: true });
@@ -872,24 +929,79 @@ export async function mediaInfoMap(
 }
 
 /**
- * File render dùng để XEM TRƯỚC một scene HyperFrames: ưu tiên bản final
- * (scene.render hoặc renders/<id>.mp4) rồi tới .draft.mp4 - cùng quy ước đặt
- * tên với jobs/sceneRender.ts. null = chưa render (hoặc scene.render vượt rào).
+ * mtime (ms) của một file trong project - null khi đường dẫn vượt rào, không
+ * tồn tại hoặc không phải file thường.
  */
-export function sceneRenderFor(projectDir: string, scene: Obj): string | null {
+export function projectFileMtimeMs(projectDir: string, rel: unknown): number | null {
+  const r = resolveProjectPath(projectDir, rel);
+  if ("error" in r) return null;
+  try {
+    const st = fs.statSync(r.abs);
+    return st.isFile() ? st.mtimeMs : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Trạng thái file render của một scene HyperFrames (có `src`) - nguồn DUY NHẤT
+ * cho trình phát (sceneRenderFor), POST /editor/render (scene nào phải render
+ * lại) và jobs/assemble.ts (bản nào được phép lắp). Cùng quy ước đặt tên với
+ * jobs/sceneRender.ts: final = scene.render hoặc renders/<id>.mp4, draft = cùng
+ * tên đuôi .draft.mp4. `*Mtime` null = file chưa có (hoặc đường dẫn vượt rào).
+ *
+ * `srcMtime` = mtime của file composition (`src`). Bản render CŨ HƠN nó là bản
+ * dựng từ composition trước khi sửa: còn tồn tại không có nghĩa là còn đúng -
+ * đã gặp thật: sửa scene, bấm render final, video ra vẫn là nội dung cũ.
+ */
+export interface SceneRenderState {
+  finalRel: string;
+  /**
+   * Trùng finalRel khi scene.render không đuôi .mp4 (không suy ra được tên bản
+   * draft) - khi đó draftMtime = finalMtime: một file đóng cả hai vai, như trước.
+   */
+  draftRel: string;
+  finalMtime: number | null;
+  draftMtime: number | null;
+  srcMtime: number | null;
+}
+
+export function sceneRenderState(projectDir: string, scene: Obj): SceneRenderState {
   const id = typeof scene.id === "string" ? scene.id : "";
   const finalRel = nonEmptyStr(scene.render) ? scene.render : `renders/${id}.mp4`;
   const draftRel = finalRel.replace(/\.mp4$/i, ".draft.mp4");
-  for (const rel of [finalRel, draftRel]) {
-    const r = resolveProjectPath(projectDir, rel);
-    if ("error" in r) continue;
-    try {
-      if (fs.statSync(r.abs).isFile()) return rel;
-    } catch {
-      /* chưa có */
-    }
+  const finalMtime = projectFileMtimeMs(projectDir, finalRel);
+  return {
+    finalRel,
+    draftRel,
+    finalMtime,
+    draftMtime: draftRel === finalRel ? finalMtime : projectFileMtimeMs(projectDir, draftRel),
+    srcMtime: projectFileMtimeMs(projectDir, scene.src),
+  };
+}
+
+/**
+ * Bản render có mtime `renderMtime` đã CŨ so với composition chưa? Không biết
+ * mtime của src (src thiếu/vượt rào) thì coi như còn mới - không có gì để so,
+ * và chặn ở đây là khóa chết những project cũ vẫn render được.
+ */
+export function isRenderStale(renderMtime: number, st: SceneRenderState): boolean {
+  return st.srcMtime !== null && renderMtime < st.srcMtime;
+}
+
+/**
+ * File render dùng để XEM TRƯỚC một scene HyperFrames. Có cả bản final lẫn
+ * .draft.mp4 thì lấy bản MỚI HƠN (mtime): ưu tiên cứng bản final là trình phát
+ * cứ chiếu bản final cũ trong khi AI vừa sửa composition và render lại draft
+ * (đúng việc prompt của /editor/chat bảo nó làm). Bằng nhau → final (nét hơn).
+ * null = chưa render (hoặc scene.render vượt rào).
+ */
+export function sceneRenderFor(projectDir: string, scene: Obj): string | null {
+  const st = sceneRenderState(projectDir, scene);
+  if (st.finalMtime !== null && (st.draftMtime === null || st.finalMtime >= st.draftMtime)) {
+    return st.finalRel;
   }
-  return null;
+  return st.draftMtime !== null ? st.draftRel : null;
 }
 
 /** Map sceneId → file xem trước, CHỈ cho scene HyperFrames (có `src`) */
@@ -898,6 +1010,22 @@ export function sceneRendersOf(projectDir: string, meta: ProjectMeta): Record<st
   for (const s of Array.isArray(meta.scenes) ? meta.scenes : []) {
     if (!isObj(s) || !nonEmptyStr(s.src) || typeof s.id !== "string") continue;
     out[s.id] = sceneRenderFor(projectDir, s);
+  }
+  return out;
+}
+
+/**
+ * `preview.mediaVersions` của GET timeline: relPath → mtimeMs (số nguyên) cho
+ * mọi file media timeline tham chiếu MÀ CÓ TRÊN ĐĨA (khóa y hệt chuỗi trong
+ * meta / sceneRenders / watermark.file). Trình phát gắn `?v=<số>` vào URL
+ * /media: render lại renders/intro.draft.mp4 thì TÊN file không đổi, không có
+ * số này trình duyệt cứ phát bản cũ trong cache.
+ */
+export function mediaVersionsOf(projectDir: string, rels: string[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const rel of new Set(rels)) {
+    const m = projectFileMtimeMs(projectDir, rel);
+    if (m !== null) out[rel] = Math.floor(m);
   }
   return out;
 }

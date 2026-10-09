@@ -3,10 +3,10 @@ import path from "node:path";
 import { Router } from "express";
 import { nanoid } from "nanoid";
 import { isAgentBusy, runAgent } from "../agent.js";
-import { syncBrandLogo } from "../childProject.js";
+import { briefPromptContextOf, syncBrandLogo } from "../childProject.js";
 import { paths, repoRoot } from "../config.js";
 import * as db from "../db.js";
-import { buildEditorChatPrompt } from "../editPrompt.js";
+import { EDITOR_CONTEXT_MARKER, buildEditorChatPrompt } from "../editPrompt.js";
 import { assertVideoJobAllowed, enqueueJob } from "../jobRules.js";
 import {
   briefOf,
@@ -22,12 +22,14 @@ import {
   buildFcp7Xml,
   isValidRev,
   listRevisions,
+  isRenderStale,
   mediaInfoMap,
+  mediaVersionsOf,
   probeMediaInfo,
   readRevision,
   referencedMediaPaths,
   resolveProjectPath,
-  sceneRenderFor,
+  sceneRenderState,
   sceneRendersOf,
   snapshotTimeline,
   timelineForClient,
@@ -144,7 +146,11 @@ router.get("/:id/timeline", async (req, res) => {
   const dir = projectDirOf(id);
   const sceneRenders = sceneRendersOf(dir, meta);
   const watermark = previewWatermark(id, meta);
-  const media = await mediaInfoMap(dir, referencedMediaPaths(meta, sceneRenders));
+  const referenced = referencedMediaPaths(meta, sceneRenders);
+  const media = await mediaInfoMap(dir, referenced);
+  // Gồm cả logo đóng góc: đổi logo trong Style Design là chép đè assets/brand-logo.*
+  // cùng tên - trình phát cũng cần số phiên bản để không giữ logo cũ trong cache
+  const mediaVersions = mediaVersionsOf(dir, watermark ? [...referenced, watermark.file] : referenced);
   const summary = projectSummaryOf(id);
   const busy = busySessionOf(id);
   res.json({
@@ -159,7 +165,7 @@ router.get("/:id/timeline", async (req, res) => {
       status: summary?.status ?? "draft",
       updatedAt: summary?.updatedAt ?? null,
     },
-    preview: { sceneRenders, watermark, media },
+    preview: { sceneRenders, watermark, media, mediaVersions },
     lock: {
       agentBusy: busy !== null,
       renderActive: db.hasActiveRenderJobForProject(id),
@@ -403,11 +409,12 @@ router.post("/:id/library-import", async (req, res) => {
 /**
  * POST /api/projects/:id/editor/render - { quality: "draft"|"final", force? } → 202 { jobs }
  *
- * Xếp scene-draft/scene-final cho scene HyperFrames còn THIẾU file render rồi
- * assemble-*. Luật y hệt POST /api/jobs (dùng chung jobRules.ts): final cần
- * assemble-draft thành công + cổng QC; `force: true` chỉ bỏ qua cổng QC.
- * Hàng đợi chạy job của cùng một project TUẦN TỰ theo thứ tự xếp, nên assemble
- * luôn chạy sau các scene của nó.
+ * Xếp scene-draft/scene-final cho scene HyperFrames còn THIẾU file render hoặc
+ * có bản render CŨ HƠN composition rồi assemble-*. Luật y hệt POST /api/jobs
+ * (dùng chung jobRules.ts): final cần assemble-draft thành công + cổng QC;
+ * `force: true` chỉ bỏ qua cổng QC. Hàng đợi chạy job của cùng một project TUẦN
+ * TỰ theo thứ tự xếp, nên assemble luôn chạy sau các scene của nó - và phụ
+ * thuộc chúng (`dependsOn`): scene nào failed thì assemble failed theo.
  */
 router.post("/:id/editor/render", (req, res) => {
   const id = req.params.id;
@@ -438,20 +445,36 @@ router.post("/:id/editor/render", (req, res) => {
     force: body.force === true,
   });
 
-  // Draft: assemble-draft tự dùng bản final nếu thiếu draft → chỉ thiếu khi
-  // KHÔNG có bản nào. Final: cần đúng bản final (bản draft chất lượng thấp).
-  const missing = (meta.scenes ?? []).filter((s) => {
+  // Scene nào phải render (lại). "Có file" KHÔNG đủ: bản render cũ hơn file
+  // composition (`src`) là dựng từ composition trước khi sửa - bỏ qua nó là
+  // người dùng sửa scene, bấm render rồi nhận đúng video cũ.
+  //  - Draft: assemble-draft tự dùng bản final khi thiếu/cũ draft → chỉ render
+  //    khi KHÔNG có bản nào (draft hay final) còn mới hơn composition.
+  //  - Final: cần đúng bản final (bản draft chất lượng thấp), và bản đó phải mới
+  //    hơn cả composition lẫn .draft.mp4 - draft mới hơn final nghĩa là scene đã
+  //    được sửa + xem lại sau lần render final cuối (cùng luật xem trước:
+  //    sceneRenderFor lấy bản mới hơn, final cũ hơn là thứ người dùng chưa xem).
+  const stale = (meta.scenes ?? []).filter((s) => {
     if (typeof s.src !== "string" || !s.src) return false;
-    if (draft) return sceneRenderFor(dir, s) === null;
-    const finalRel = typeof s.render === "string" && s.render ? s.render : `renders/${s.id}.mp4`;
-    const r = resolveProjectPath(dir, finalRel);
-    return "error" in r || !fs.existsSync(r.abs);
+    const st = sceneRenderState(dir, s as unknown as Record<string, unknown>);
+    const fresh = (m: number | null): boolean => m !== null && !isRenderStale(m, st);
+    if (draft) return !fresh(st.draftMtime) && !fresh(st.finalMtime);
+    if (!fresh(st.finalMtime)) return true;
+    return st.draftRel !== st.finalRel && st.draftMtime !== null && st.finalMtime! < st.draftMtime;
   });
 
-  const jobs = missing.map((s) =>
+  const jobs = stale.map((s) =>
     enqueueJob({ projectId: id, type: draft ? "scene-draft" : "scene-final", sceneId: s.id }),
   );
-  jobs.push(enqueueJob({ projectId: id, type: draft ? "assemble-draft" : "assemble-final" }));
+  // assemble phụ thuộc các scene job của CHÍNH lượt này: một scene render hỏng
+  // thì assemble failed luôn (queue.ts) thay vì lặng lẽ lắp bằng bản cũ/bản draft
+  jobs.push(
+    enqueueJob({
+      projectId: id,
+      type: draft ? "assemble-draft" : "assemble-final",
+      dependsOn: jobs.map((j) => j.id),
+    }),
+  );
   res.status(202).json({ jobs });
 });
 
@@ -520,7 +543,19 @@ router.post("/:id/editor/chat", (req, res) => {
       null,
     );
   }
-  const prompt = buildEditorChatPrompt({ id, meta, message, firstTurn: !existing });
+  // Khối ngữ cảnh đầy đủ cho MỌI phiên chưa từng nhận nó - không chỉ phiên mới
+  // tạo: phiên /api/chat cũ của project (goal null) tiếp tục từ editor cũng chưa
+  // biết đơn vị timeline, luật "không tự render", hay brief/Style Design. Soi
+  // tin nhắn đã lưu (agent.ts lưu nguyên văn prompt) thay vì cờ riêng: lượt bị
+  // guard của runAgent chặn trước khi chạy thì không lưu → lượt sau gửi lại khối.
+  const needsContext =
+    !existing || !db.chatSessionHasUserMessageContaining(sessionId, EDITOR_CONTEXT_MARKER);
+  const prompt = buildEditorChatPrompt({
+    id,
+    meta,
+    message,
+    context: needsContext ? briefPromptContextOf(id, meta) : null,
+  });
 
   // Trả 202 NGAY rồi chạy agent nền - cùng thứ tự với /api/chat (SSE kênh `agent`)
   res.status(202).json({ sessionId });

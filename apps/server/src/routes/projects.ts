@@ -148,6 +148,10 @@ const CLONE_SKIP = new Set([
   "verify",
   "node_modules",
   "props.resolved.json", // sản phẩm trung gian của lần assemble cũ
+  // Lịch sử timeline của trình chỉnh sửa (tới 100 bản): là lịch sử của project
+  // GỐC - chép sang thì "khôi phục" ở bản nhân bản đưa về trạng thái của project
+  // khác, và project mới đẻ ra đã nặng thêm cả trăm file JSON
+  ".history",
 ]);
 
 function copyDirFiltered(src: string, dst: string): void {

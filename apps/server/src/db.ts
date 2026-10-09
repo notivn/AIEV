@@ -697,6 +697,19 @@ export function addChatMessage(
   ).run(sessionId, role, kind, content, nowIso());
 }
 
+/**
+ * Phiên đã có tin nhắn user nào chứa `needle` chưa (so khớp CHÍNH XÁC, phân biệt
+ * hoa thường - instr, không phải LIKE: chuỗi tìm có thể chứa `%`/`_`).
+ * routes/timeline.ts dùng để biết phiên đã nhận khối ngữ cảnh trình chỉnh sửa.
+ */
+export function chatSessionHasUserMessageContaining(sessionId: string, needle: string): boolean {
+  return !!db
+    .prepare(
+      "SELECT 1 FROM chat_messages WHERE sessionId = ? AND role = 'user' AND instr(content, ?) > 0 LIMIT 1",
+    )
+    .get(sessionId, needle);
+}
+
 export function listChatMessages(
   sessionId: string,
 ): Array<Pick<ChatMessageRow, "role" | "kind" | "content" | "createdAt">> {

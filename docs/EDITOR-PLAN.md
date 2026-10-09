@@ -65,9 +65,10 @@ GET  /api/projects/:id/timeline
       project: { id, name, width, height, fps, status, updatedAt },
       preview: {
         // đường dẫn (tương đối project) file MP4 xem trước cho scene HyperFrames:
-        // ưu tiên renders/<id>.mp4 (final) rồi .draft.mp4; null = chưa render
+        // bản MỚI HƠN (mtime) giữa renders/<id>.mp4 và .draft.mp4; null = chưa render
         sceneRenders: Record<sceneId, string | null>,
         watermark: null | { file: string, position: "top-left" },   // giống assemble.ts (syncBrandLogo)
+        mediaVersions: Record<relPath, number>,   // mtimeMs - trình phát gắn ?v= để file render lại được nạp lại
         // thời lượng thật (giây) của mọi file media được timeline tham chiếu, đo ffprobe, cache theo mtime
         media: Record<relPath, { durationSec: number | null, width?: number, height?: number, hasAudio?: boolean }>
       },

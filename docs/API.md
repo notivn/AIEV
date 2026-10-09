@@ -105,6 +105,8 @@ DELETE /api/upload-session/:token   → 204                                     
 
 URL/QR mang token qua query `?k=`; trang `/m` gửi lại qua field `token` (append TRƯỚC `file`). POST `/api/assets` từ máy KHÁC máy chủ (điện thoại LAN/tunnel - không phải loopback, hoặc có `x-forwarded-for`) bắt buộc token phiên upload hợp lệ, đúng project khi scope là `project` - sai/thiếu → `403 UPLOAD_TOKEN_INVALID` ("Link upload đã hết hạn — mở lại mã QR trên máy tính.").
 
+Phạm vi của `?k=` (middleware xác thực ở index.ts) là DANH SÁCH TRẮNG, đúng những gì trang `/m` gọi: `GET /api/projects/:id` (hiện tên project) và `POST /api/assets` (upload). So trên đường dẫn đã chuẩn hóa như router Express (không phân biệt hoa thường, bỏ một `/` cuối); mọi đường khác - kể cả `/media/*`, `/api/lan-info`, timeline/export.xml/media-info/revisions của trình chỉnh sửa, viết hoa hay thường - trả `401 UNAUTHORIZED` dù token phiên còn hạn.
+
 Ngoại lệ: request mang `AIEV_API_TOKEN` (header `x-aiev-token`, cookie `aiev_token` hoặc query `?t=`) được miễn token phiên QR. Đó là dashboard của chính chủ máy mở qua tunnel; token này vốn đã mở được cả chạy agent lẫn xóa project nên đòi thêm mã QR không thêm an toàn, chỉ chặn nhầm.
 
 **Đóng modal QR = đóng hết.** Thu hồi token, và nếu đường Internet được bật TỪ CHÍNH modal đó thì
@@ -128,7 +130,8 @@ POST   /api/projects            { id?, name, width, height, fps, tags? } → Pro
 GET    /api/projects/:id        → meta.json đầy đủ + { files: { renders: FileInfo[], assets: FileInfo[] } }
 DELETE /api/projects/:id?force=true → 204 (không có force → 400)
 POST   /api/projects/:id/clone  { name? } → ProjectSummary (201) — nhân bản project:
-                                  copy compositions/assets/brief/tags/scenes (bỏ renders/cache),
+                                  copy compositions/assets/brief/tags/scenes (bỏ renders/cache/
+                                  .history - lịch sử timeline là của project gốc),
                                   reset status draft + output null, id mới sinh từ name
 
 PUT    /api/projects/:id/name   { name } → ProjectSummary - đổi TÊN HIỂN THỊ (400 INVALID_NAME khi
@@ -888,10 +891,12 @@ Revision  = { rev, createdAt, label: string|null, source: "editor"|"ai-before"|"
 GET  /api/projects/:id/timeline
   → { version, timeline: Timeline,
       project: { id, name, width, height, fps, status, updatedAt },
-      preview: { sceneRenders: { [sceneId]: relPath|null },     // chỉ scene HyperFrames (có src):
-                                                                 // renders/<id>.mp4 (hoặc scene.render) rồi .draft.mp4
+      preview: { sceneRenders: { [sceneId]: relPath|null },     // chỉ scene HyperFrames (có src): bản MỚI HƠN
+                                                                 // (mtime) giữa renders/<id>.mp4 (hoặc scene.render)
+                                                                 // và .draft.mp4; bằng nhau → bản final
                  watermark: { file, position: "top-left" } | null, // logo Style Design, giống jobs/assemble.ts
-                 media: { [relPath]: MediaInfo } },              // mọi file timeline tham chiếu (+ file xem trước)
+                 media: { [relPath]: MediaInfo },                // mọi file timeline tham chiếu (+ file xem trước)
+                 mediaVersions: { [relPath]: number } },         // mtimeMs (số nguyên) - xem dưới
       lock: { agentBusy, renderActive, sessionId: string|null } }
 
 PUT  /api/projects/:id/timeline   { baseVersion, timeline: Partial<Timeline>, label? }
@@ -934,6 +939,14 @@ có job `scene-*`/`assemble-*` của project đang chạy hoặc chờ, để UI
 đổi mới. Thứ tự kiểm của PUT (sau khi kiểm hình dạng body): 404 → `AGENT_BUSY` → `VERSION_CONFLICT`
 → `INVALID_TIMELINE` - base đã cũ thì client phải tải lại đằng nào cũng vậy.
 
+**`preview.mediaVersions`** = `{ [relPath]: mtimeMs }` (ms, `Math.floor` - số nguyên) cho MỌI file media
+timeline tham chiếu mà CÓ trên đĩa: file xem trước đã chọn trong `sceneRenders`, `scenes[].srcVideo`,
+`scenes[].srcImage`, `scenes[].render` (scene không có `src`), `audio.voice`, `audio.sfx[].file`,
+`audio.music.file` và `watermark.file`. Khóa là ĐÚNG chuỗi đường dẫn như trong meta / `sceneRenders` /
+`watermark.file` (tương đối project); file thiếu, đường dẫn vượt rào → không có khóa. Trình phát gắn
+`?v=<số>` vào URL `/media/...` của file đó: render lại scene hay chép đè logo giữ nguyên TÊN file,
+không có số này trình duyệt phát bản cũ trong cache. Số đổi ⇔ file trên đĩa đã đổi.
+
 **PUT.** Khóa nào có trong `timeline` thì THAY NGUYÊN khóa đó, khóa không gửi giữ nguyên trên đĩa;
 mọi khóa khác của meta.json (`brief`, `status`, `output`, `tags`, field lạ của agent) không bao giờ bị
 đụng. Khóa ngoài 6 khóa trên → issue `timeline.<khóa>`. `subtitleStyle: null` = xóa khóa (về mặc
@@ -956,8 +969,9 @@ nằm trong thư mục project (cùng hàng rào với `stage()` của jobs/asse
 
 **Lịch sử phiên bản** - `video-projects/<id>/.history/<rev>.json` = `{ rev, createdAt, label, source,
 version, timeline }` (timeline thô, khóa thiếu = null). `rev` = thời gian ISO với `:`/`.` đổi thành `-`
-(Windows cấm `:` trong tên file) + 4 ký tự ngẫu nhiên, vd `2026-10-09T12-40-24-833Z-d539`. Giữ 100 bản
-mới nhất. Chụp khi: PUT (bản CŨ, source `editor`, label của body), restore (bản hiện tại trước khi
+(Windows cấm `:` trong tên file) + 4 ký tự ngẫu nhiên, vd `2026-10-09T12-40-24-833Z-d539`. Giữ tối đa
+100 bản; vượt thì xóa bản cũ nhất, NHƯNG 20 bản `ai-before`/`ai-after` mới nhất không bao giờ bị xóa (một
+buổi kéo thả dài đẻ cả trăm bản `editor` không đẩy rơi điểm "trước khi AI sửa"). Chụp khi: PUT (bản CŨ, source `editor`, label của body), restore (bản hiện tại trước khi
 khôi phục, source `restore`, label = rev được khôi phục), phiên AI gắn project BẮT ĐẦU (`ai-before`)
 và KẾT THÚC mà version đổi (`ai-after`) - label = tiêu đề phiên. Bỏ qua khi bản mới nhất đã cùng
 version; các lần PUT liên tiếp cùng label trong 10 giây gộp vào bản đầu loạt (tự lưu ~700ms khi kéo
@@ -974,24 +988,42 @@ mp3 không tính là hình. File thiếu trong `preview.media` → `{ durationSe
 đúng file đó (so nội dung) → `copied: false`, dùng lại; trùng tên mà khác nội dung → KHÔNG ghi đè, lưu
 thành `<tên>-2.<ext>`, `-3`... và trả `relPath` mới.
 
-**Editor render.** Soi toàn bộ timeline trên đĩa trước (như validate PUT, thêm luật `scenes` ≥ 1), rồi
-luật dùng chung với `POST /api/jobs` (`apps/server/src/jobRules.ts`): final cần assemble-draft thành
-công (`DRAFT_REQUIRED`) + cổng QC (`QC_REQUIRED`/`QC_FAILED`, `force: true` chỉ bỏ qua cổng QC). Xếp
-`scene-draft`/`scene-final` (mỗi scene một job, có `sceneId`) cho scene HyperFrames còn THIẾU file render
-- draft: không có cả bản final lẫn `.draft.mp4` (assemble-draft tự dùng bản final); final: thiếu
-`renders/<id>.mp4` (hoặc `scene.render`) - rồi `assemble-draft`/`assemble-final`. `jobs` theo đúng thứ tự
-xếp; hàng đợi chạy job cùng project tuần tự nên assemble luôn chạy sau các scene của nó.
+**Editor render.** Soi toàn bộ timeline trên đĩa trước (như validate PUT, thêm luật `scenes` ≥ 1; khóa
+tùy chọn `null` coi như thiếu - xem "null ở khóa tùy chọn" dưới), rồi luật dùng chung với `POST /api/jobs`
+(`apps/server/src/jobRules.ts`): final cần assemble-draft thành công (`DRAFT_REQUIRED`) + cổng QC
+(`QC_REQUIRED`/`QC_FAILED`, `force: true` chỉ bỏ qua cổng QC). Xếp `scene-draft`/`scene-final` (mỗi scene
+một job, có `sceneId`) cho scene HyperFrames có bản render THIẾU hoặc CŨ (mtime nhỏ hơn mtime của file
+composition `src`):
+- draft: không còn bản nào (`.draft.mp4` hay bản final) mới hơn composition (assemble-draft tự dùng bản final);
+- final: `renders/<id>.mp4` (hoặc `scene.render`) thiếu, cũ hơn composition, hoặc cũ hơn `.draft.mp4`
+  (scene đã sửa + xem lại sau lần render final cuối),
+
+rồi `assemble-draft`/`assemble-final`. `jobs` theo đúng thứ tự xếp; hàng đợi chạy job cùng project tuần tự
+nên assemble luôn chạy sau các scene của nó, và assemble PHỤ THUỘC các scene job của chính lượt đó: một
+scene job `failed`/`canceled` thì assemble `failed` luôn (log: job nào, scene nào) thay vì lắp bằng bản
+render cũ/bản draft.
 
 **Editor chat.** Phiên `goal: null` (KHÔNG phải 'final' → không gate "phải có video final", không
 auto-resume ép render), title `Trình chỉnh sửa: <60 ký tự đầu>` (không bao giờ bắt đầu bằng `Edit: ` -
-db.ts backfill title đó thành goal 'final' mỗi lần khởi động). Lượt đầu kèm khối ngữ cảnh
-(`buildEditorChatPrompt` ở editPrompt.ts): luật an toàn, đơn vị của từng khóa, người dùng đang xem
+db.ts backfill title đó thành goal 'final' mỗi lần khởi động). Lượt đầu MÀ PHIÊN NHẬN trong trình chỉnh
+sửa kèm khối ngữ cảnh (`buildEditorChatPrompt` ở editPrompt.ts) - kể cả khi tiếp tục một phiên `/api/chat`
+có sẵn của project: server soi tin nhắn user đã lưu của phiên, chưa có dòng tiêu đề khối
+(`EDITOR_CONTEXT_MARKER`) thì gửi khối. Khối gồm: luật an toàn, đơn vị của từng khóa, người dùng đang xem
 trước trực tiếp, LUÔN đọc lại meta.json trước khi sửa + sửa tại chỗ + giữ field lạ, KHÔNG tự render
 draft/final trừ khi được yêu cầu (scene HyperFrames mới/sửa thì xếp `scene-draft` qua `/api/jobs`),
-báo lại ngắn gọn. Lượt sau (gửi kèm `sessionId`) kèm lời nhắc ngắn cùng ý - giữa hai lượt người dùng có
-thể đã sửa tay. `sessionId` phải là phiên của CHÍNH project này (`SESSION_PROJECT_MISMATCH`) và không
+báo lại ngắn gọn; và cấu hình của project dựng bằng CÙNG các hàm với `buildEditPrompt`: mọi công tắc brief
+in đủ hai chiều BẬT/TẮT (tự động cắt, phụ đề, làm nổi bật key, bố cục key, ảnh minh họa AI), Style Design
+(màu/font/tone + luật logo), thư viện logo brand, phong cách dựng (qua `activeVideoStyleId` - tắt thì nói
+rõ TẮT), sound effect, nhạc nền. Công tắc BẬT = cách làm khi yêu cầu đụng tới phần đó (không tự dựng lại
+cả video), TẮT = cấm. Lượt sau kèm lời nhắc ngắn cùng ý - giữa hai lượt người dùng có thể đã sửa tay. `sessionId` phải là phiên của CHÍNH project này (`SESSION_PROJECT_MISMATCH`) và không
 phải phiên dựng video goal 'final' (`SESSION_NOT_EDITOR`). Bất kỳ phiên AI nào của project đang chạy
 hoặc chờ tự chạy lại → 409 `SESSION_BUSY`. model/effort như `/api/chat`.
+
+**null ở khóa tùy chọn.** `audio`, `captions`, `subtitles`, `subtitleStyle`, `overlays` (và `audio.sfx`)
+mang giá trị `null` = "không có": jobs/assemble.ts xóa chúng khỏi props trước khi ghi
+`props.resolved.json` (zod của engine chỉ điền mặc định cho khóa THIẾU, gặp null là từ chối cả manifest),
+validator trước render soi đúng bản đã chuẩn hóa đó, và trình phát vốn đã hiểu vậy (`timelineForClient`
+điền mặc định). `audio.voice: null`, `audio.music: null` thì engine nhận sẵn.
 
 **Xuất FCP7 XML** (mở được bằng Premiere Pro và DaVinci Resolve). `timebase` = fps làm tròn; `ntsc`
 FALSE với fps nguyên, TRUE chỉ với fps kiểu NTSC (n×1000/1001: 23.976, 29.97, 59.94). Mọi thời gian
@@ -1171,6 +1203,11 @@ Thực thi (cwd trong ngoặc):
   Dùng chung khóa "bận" `vid:` với scene/assemble vì nó ghi đè asset của chính project đó.
 - Progress: parse stdout hai CLI (dòng tiến độ frame) → `progress` + `step`, đẩy SSE. Log đầy đủ lưu DB.
 - Server từ chối (409) job `*-final` nếu chưa có job `assemble-draft` thành công cho project đó.
+- Scene HyperFrames khi assemble: draft dùng `.draft.mp4`, thiếu/cũ thì dùng tạm bản final; final dùng
+  `renders/<id>.mp4` (hoặc `scene.render`), THIẾU thì dùng tạm `.draft.mp4` (log `[warn]`). Bản được chọn
+  mà CŨ HƠN file composition (`src`, so mtime) → job `failed` với lý do chỉ đích danh scene + file - lắp
+  vào là ra nội dung trước khi sửa. Riêng final: bản final có mà cũ thì failed thẳng, không lùi về draft.
+  Không đọc được mtime của `src` thì không chặn.
 
 ## SSE — GET /api/events
 

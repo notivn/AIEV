@@ -13,6 +13,7 @@ import {
 } from "../meta.js";
 import { syncBrandLogo } from "../childProject.js";
 import { getStyle } from "../styles.js";
+import { dropNullOptionalKeys, isRenderStale, sceneRenderState } from "../timeline.js";
 import { ensureDir, remotionCli } from "../util.js";
 import { remotionSpeedArgs } from "../renderSettings.js";
 import { parseProgressLine, shortenStep } from "./progress.js";
@@ -105,27 +106,16 @@ export async function runAssemble(ctx: JobCtx): Promise<void> {
   // props = bản sao meta với đường dẫn asset đã resolve sang staging/
   const props = JSON.parse(JSON.stringify(meta)) as ProjectMeta;
 
+  // null ở khóa tùy chọn (captions/subtitles/overlays/subtitleStyle/audio,
+  // audio.sfx) = "không có" - zod của engine chỉ điền mặc định cho undefined
+  // và từ chối null, trong khi trình phát đã hiểu null là thiếu. Chuẩn hóa
+  // TRƯỚC mọi bước dưới để bản render giống bản xem trước (timeline.ts).
+  dropNullOptionalKeys(props as unknown as Record<string, unknown>);
+
   for (const scene of props.scenes ?? []) {
     if (typeof scene.src === "string" && scene.src) {
       // Scene HyperFrames: dùng file render trung gian
-      const finalRel =
-        typeof scene.render === "string" && scene.render
-          ? scene.render
-          : `renders/${scene.id}.mp4`;
-      const draftRel = finalRel.replace(/\.mp4$/i, ".draft.mp4");
-      let renderRel = draft ? draftRel : finalRel;
-      if (!fs.existsSync(path.join(projectDir, renderRel))) {
-        const alt = draft ? finalRel : draftRel;
-        if (fs.existsSync(path.join(projectDir, alt))) {
-          ctx.log(`[warn] Không thấy ${renderRel}, dùng tạm ${alt}`);
-          renderRel = alt;
-        } else {
-          throw new Error(
-            `Scene "${scene.id}" chưa được render (${renderRel}). Chạy job scene-${draft ? "draft" : "final"} trước.`,
-          );
-        }
-      }
-      scene.render = stage(renderRel);
+      scene.render = stage(pickSceneRender(ctx, projectDir, scene, draft));
     } else if (
       (typeof scene.srcVideo === "string" && scene.srcVideo) ||
       (typeof scene.srcImage === "string" && scene.srcImage)
@@ -307,6 +297,52 @@ export async function runAssemble(ctx: JobCtx): Promise<void> {
     writeMeta(projectId, freshMeta);
     ctx.log(`[meta] Cập nhật status=done, output=${outputRel}`);
   }
+}
+
+/**
+ * Chọn file render của một scene HyperFrames để lắp (đường dẫn tương đối project).
+ *
+ * - draft: `.draft.mp4`, thiếu (hoặc cũ hơn composition) thì dùng tạm bản final.
+ * - final: `renders/<id>.mp4` (hoặc scene.render); THIẾU thì dùng tạm `.draft.mp4`
+ *   như trước (pipeline của agent có lúc lắp final từ draft).
+ *
+ * Luật mới: bản được chọn mà CŨ HƠN file composition (`src`) thì TỪ CHỐI - nó
+ * dựng từ composition trước khi sửa. Trước đây chỉ kiểm "có file" nên sửa scene
+ * xong render final vẫn ra nội dung cũ, không một dòng cảnh báo. Riêng final:
+ * bản final có mà cũ thì từ chối thẳng, KHÔNG lùi về draft (lắp video final bằng
+ * bản draft chất lượng thấp là lỗi lặng lẽ khác). Không đọc được mtime của src
+ * thì không chặn (xem isRenderStale).
+ */
+function pickSceneRender(ctx: JobCtx, projectDir: string, scene: SceneMeta, draft: boolean): string {
+  const st = sceneRenderState(projectDir, scene as unknown as Record<string, unknown>);
+  const want = draft
+    ? { rel: st.draftRel, mtime: st.draftMtime }
+    : { rel: st.finalRel, mtime: st.finalMtime };
+  const alt = draft
+    ? { rel: st.finalRel, mtime: st.finalMtime }
+    : { rel: st.draftRel, mtime: st.draftMtime };
+  const jobType = `scene-${draft ? "draft" : "final"}`;
+  const staleError = (rel: string): Error =>
+    new Error(
+      `Scene "${scene.id}": bản render ${rel} CŨ HƠN composition ${String(scene.src)} ` +
+        `(composition đã sửa sau lần render đó) - lắp vào là ra nội dung cũ. ` +
+        `Chạy lại job ${jobType} cho scene này rồi lắp lại.`,
+    );
+
+  if (want.mtime !== null && !isRenderStale(want.mtime, st)) return want.rel;
+  // Final có file nhưng cũ: không lùi về draft (xem trên)
+  if (!draft && want.mtime !== null) throw staleError(want.rel);
+  if (alt.mtime !== null && alt.rel !== want.rel) {
+    if (isRenderStale(alt.mtime, st)) throw staleError(want.mtime !== null ? want.rel : alt.rel);
+    ctx.log(
+      want.mtime === null
+        ? `[warn] Không thấy ${want.rel}, dùng tạm ${alt.rel}`
+        : `[warn] ${want.rel} cũ hơn composition, dùng ${alt.rel} (mới hơn)`,
+    );
+    return alt.rel;
+  }
+  if (want.mtime !== null) throw staleError(want.rel);
+  throw new Error(`Scene "${scene.id}" chưa được render (${want.rel}). Chạy job ${jobType} trước.`);
 }
 
 /** Quét outputs/ tìm <projectId>-v<N>.mp4 lớn nhất → N+1 (bắt đầu từ 1) */

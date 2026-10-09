@@ -3820,15 +3820,20 @@ export interface TimelineMediaInfo {
 }
 
 export interface TimelinePreview {
-  /** sceneId → file xem trước (final rồi tới .draft.mp4) của scene HyperFrames; null = chưa render. */
+  /**
+   * sceneId → file xem trước của scene HyperFrames: bản MỚI HƠN (mtime) giữa
+   * final và .draft.mp4 (bằng nhau → final); null = chưa render.
+   */
   sceneRenders: Record<string, string | null>;
   /** Logo Style Design đóng góc - giống jobs/assemble.ts; null = style không có logo. */
   watermark: { file: string; position: "top-left" } | null;
   /** relPath (tương đối project) → thông số thật của mọi file timeline tham chiếu. */
   media: Record<string, TimelineMediaInfo>;
   /**
-   * relPath → mtimeMs của mọi file media timeline tham chiếu - trình phát gắn
-   * `?v=` để file render lại cùng đường dẫn được nạp lại. Server cũ: vắng mặt.
+   * relPath (đúng chuỗi trong meta / sceneRenders / watermark.file) → mtimeMs
+   * (số nguyên) của mọi file media timeline tham chiếu CÓ trên đĩa. Trình phát
+   * gắn `?v=` vào URL /media để file render lại cùng tên không bị trình duyệt
+   * phát bản cũ trong cache. File thiếu → không có khóa; server cũ → vắng mặt.
    */
   mediaVersions?: Record<string, number>;
 }
