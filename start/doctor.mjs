@@ -37,7 +37,7 @@ const IS_MAC = process.platform === "darwin";
 const NPM = IS_WIN ? "npm.cmd" : "npm";
 
 /** Node tối thiểu - phải khớp README và package.json */
-export const MIN_NODE_MAJOR = 20;
+export const MIN_NODE_MAJOR = 22;
 
 /**
  * MỌI THỨ NẶNG DO DỰ ÁN TỰ TẢI VỀ ĐỀU NẰM TRONG .runtime/ CỦA CHÍNH DỰ ÁN.
@@ -89,10 +89,20 @@ function runtimeEnv() {
 
 // ===================== tiện ích =====================
 
+/**
+ * Windows + Node >= 20.12 (vá CVE-2024-27980): spawn file .cmd/.bat KHÔNG qua
+ * shell là lỗi EINVAL ngay - claude.cmd luôn bị báo "chưa cài" và cài bằng
+ * npm.cmd luôn hỏng. Các lệnh .cmd ở đây chỉ nhận tham số hằng không có dấu
+ * cách, nên bật shell cho riêng chúng là an toàn.
+ */
+function needsShell(file) {
+  return IS_WIN && /\.(cmd|bat)$/i.test(file);
+}
+
 /** Chạy lệnh, KHÔNG bao giờ ném - thiếu lệnh trả về { ok: false } */
 function run(file, args, timeout = 10_000, env = null) {
   try {
-    const opts = { encoding: "utf8", timeout, windowsHide: true };
+    const opts = { encoding: "utf8", timeout, windowsHide: true, shell: needsShell(file) };
     if (env) opts.env = env;
     const r = spawnSync(file, args, opts);
     if (r.error) return { ok: false, out: "" };
@@ -712,6 +722,7 @@ function spawnLogged(file, args, log, env = null) {
     const child = spawn(file, args, {
       cwd: ROOT,
       windowsHide: true,
+      shell: needsShell(file),
       ...(env ? { env } : {}),
     });
     const onData = (buf) => {

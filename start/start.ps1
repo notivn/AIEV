@@ -30,11 +30,11 @@ Write-Host "  ==========================" -ForegroundColor DarkGray
 try {
     $nodeVer = (node --version) -replace "v", ""
 } catch {
-    Write-Err "Chưa cài Node.js. Tải tại https://nodejs.org (bản 20 trở lên) rồi chạy lại."
+    Write-Err "Chưa cài Node.js. Tải tại https://nodejs.org (bản 22 trở lên) rồi chạy lại."
     exit 1
 }
-if ([int]($nodeVer.Split(".")[0]) -lt 20) {
-    Write-Err "Node.js $nodeVer quá cũ - cần bản 20 trở lên."
+if ([int]($nodeVer.Split(".")[0]) -lt 22) {
+    Write-Err "Node.js $nodeVer quá cũ - cần bản 22 trở lên."
     exit 1
 }
 Write-Ok "Node.js v$nodeVer"

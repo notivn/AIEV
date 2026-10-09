@@ -7,6 +7,7 @@ import {
   useVideoConfig,
 } from "remotion";
 import type { SubtitleCue, SubtitleStyle } from "../manifest";
+import { fadeInOut } from "./fade";
 import {
   useVietnameseFont,
   VIETNAMESE_FONT_FAMILY,
@@ -127,10 +128,7 @@ const Cue: React.FC<{
   const bottomBase = raised ? Math.max(baseBottom, raisedBottom) : baseBottom;
 
   // Vào 4 frame / ra 4 frame để không "bật tắt" cứng giữa hai câu.
-  const opacity = interpolate(frame, [0, 4, Math.max(5, last - 4), last], [0, 1, 1, 0], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
+  const opacity = fadeInOut(frame, last, 4, 4);
   const y = interpolate(frame, [0, 5], [18, 0], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",

@@ -72,11 +72,16 @@ if ($LASTEXITCODE -ne 0) {
     # Máy chỉ-dùng hay dính thay đổi cục bộ (đổi eol, sửa nhầm file…) - stash rồi pull lại
     # `git stash -u` gom cả file untracked (skill tự tạo) nên backup ở trên là bắt buộc.
     Write-Host "  -> Pull thất bại - đã backup dữ liệu vào $bk rồi stash thay đổi cục bộ..." -ForegroundColor Yellow
+    $stashBefore = git rev-parse -q --verify refs/stash
     git stash push -u -m "aiev-auto-stash"
+    $stashAfter = git rev-parse -q --verify refs/stash
     git merge --ff-only $target
     if ($LASTEXITCODE -ne 0) {
+        # stash -u đã RÚT file untracked (skill tự tạo...) khỏi thư mục làm việc - trả
+        # lại ngay. Chỉ pop khi đúng là vừa có stash mới, kẻo pop nhầm stash cũ.
+        if ($stashAfter -and $stashAfter -ne $stashBefore) { git stash pop }
         Write-Host "  [LOI] Vẫn không pull được - xem chi tiết trong start\update.log. Hệ thống cũ vẫn chạy bình thường." -ForegroundColor Red
-        Write-Host "        Chạy 'git status' xem file nào đổi, 'git stash list' xem bản stash." -ForegroundColor Yellow
+        Write-Host "        Chạy 'git status' xem file nào đổi." -ForegroundColor Yellow
         Write-Host "        Dữ liệu của bạn vẫn nằm nguyên trong $bk." -ForegroundColor Yellow
         Stop-UpdateLog
         Read-Host "  Enter để thoát"

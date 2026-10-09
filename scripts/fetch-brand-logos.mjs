@@ -138,8 +138,24 @@ async function main() {
   // File người dùng tự bỏ vào (vd logo đủ màu tải từ trang brand chính chủ)
   if (KEEP_EXTRA) {
     const known = new Set(found.map((f) => f.file));
+    // Entry đang có trong library.json (server tải từ Wikidata/Commons, kèm
+    // title/source/license riêng) phải giữ NGUYÊN - dựng lại thành
+    // "title = slug, source = null" là mất giấy phép từng file, và license CC0
+    // chung ở đầu file lại phủ lên cả những file Commons không phải CC0.
+    const existing = new Map();
+    try {
+      for (const e of JSON.parse(fs.readFileSync(LIBRARY, "utf8")).icons ?? []) {
+        if (e && typeof e.file === "string") existing.set(e.file, e);
+      }
+    } catch {
+      /* chưa có / hỏng - dựng mới như trước */
+    }
     for (const f of fs.readdirSync(OUT_DIR)) {
       if (!/\.(svg|png)$/i.test(f) || known.has(f)) continue;
+      if (existing.has(f)) {
+        found.push(existing.get(f));
+        continue;
+      }
       const slug = f.replace(/\.(svg|png)$/i, "");
       found.push({
         slug,

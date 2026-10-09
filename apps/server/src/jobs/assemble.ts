@@ -178,7 +178,7 @@ export async function runAssemble(ctx: JobCtx): Promise<void> {
         typeof scene.from === "number" &&
         typeof scene.to === "number"
       ) {
-        return Math.max(1, Math.round((scene.to - scene.from) * props.fps));
+        return Math.max(1, Math.round(scene.to * props.fps) - Math.round(scene.from * props.fps));
       }
       return null; // thiếu thời lượng - để Remotion tự báo lỗi rõ ở bước render
     };
