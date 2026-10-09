@@ -3,7 +3,7 @@ import path from "node:path";
 import { nanoid } from "nanoid";
 import { paths, repoRoot } from "./config.js";
 import * as db from "./db.js";
-import { buildEditPrompt } from "./editPrompt.js";
+import { buildEditPrompt, type BriefPromptContext } from "./editPrompt.js";
 import {
   briefOf,
   defaultBrief,
@@ -444,14 +444,13 @@ export function syncBrandLogo(id: string, style: StyleDesign | null): string | n
   return fileName;
 }
 
-export function prepareEditSession(input: {
-  id: string;
-  meta: ProjectMeta;
-  extraNotes?: string;
-  model?: string | null;
-  effort?: string | null;
-}): { sessionId: string; prompt: string } {
-  const { id, meta } = input;
+/**
+ * Cấu hình brief đã resolve cho prompt - dùng chung cho phiên dựng video
+ * (prepareEditSession) và lượt chat đầu của trình chỉnh sửa (routes/timeline.ts),
+ * để hai prompt luôn thấy CÙNG một Style Design, logo, bộ sfx và thư viện nhạc.
+ * Có tác dụng phụ: chép logo của Style Design vào assets/ (syncBrandLogo).
+ */
+export function briefPromptContextOf(id: string, meta: ProjectMeta): BriefPromptContext {
   const brief = briefOf(meta);
   const recommendedSfx =
     brief.sfxMode === "recommended"
@@ -469,16 +468,24 @@ export function prepareEditSession(input: {
   const style = getStyle(brief.styleId);
   // Chép logo TRƯỚC khi liệt kê asset để nó nằm luôn trong danh sách agent đọc
   const brandLogoFile = syncBrandLogo(id, style);
+  return { brief, style, brandLogoFile, recommendedSfx, music };
+}
+
+export function prepareEditSession(input: {
+  id: string;
+  meta: ProjectMeta;
+  extraNotes?: string;
+  model?: string | null;
+  effort?: string | null;
+}): { sessionId: string; prompt: string } {
+  const { id, meta } = input;
+  const ctx = briefPromptContextOf(id, meta);
 
   const prompt = buildEditPrompt({
     id,
     meta,
-    brief,
+    ...ctx,
     assets: listProjectAssets(id),
-    recommendedSfx,
-    music,
-    style,
-    brandLogoFile,
     extraNotes: input.extraNotes ?? "",
   });
 

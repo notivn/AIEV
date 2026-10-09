@@ -100,10 +100,43 @@ function broadcastJob(jobId: string): void {
 class RenderQueue {
   private pending: string[] = [];
   private running = new Map<string, Current>();
+  /**
+   * jobId → các job phải XONG ("done") trước khi job này được chạy. Dùng cho một
+   * lượt render của trình chỉnh sửa: scene-final của scene vừa sửa mà failed thì
+   * assemble-final xếp sau KHÔNG được chạy tiếp - nó sẽ lặng lẽ lắp bằng bản
+   * render cũ (hoặc bản draft) và người dùng nhận một video "final" sai nội dung.
+   * Nằm trong RAM như chính hàng đợi: restart server là mọi job đang chờ đã bị
+   * đánh failed (failStaleRunningJobs), nên mất map này cũng không sao.
+   */
+  private deps = new Map<string, string[]>();
 
-  enqueue(jobId: string): void {
+  enqueue(jobId: string, dependsOn: string[] = []): void {
+    if (dependsOn.length) this.deps.set(jobId, [...dependsOn]);
     this.pending.push(jobId);
     this.tick();
+  }
+
+  /**
+   * Job phụ thuộc chưa xong hẳn (failed/canceled/mất khỏi DB) → lý do từ chối
+   * chạy; null = chạy được. Hàng đợi chạy job CÙNG project tuần tự theo thứ tự
+   * xếp, nên tới lượt job này thì các job nó phụ thuộc (xếp trước, cùng project)
+   * đều đã kết thúc - không cần chờ, chỉ cần soi kết quả.
+   */
+  private unmetDependency(jobId: string): string | null {
+    const deps = this.deps.get(jobId);
+    this.deps.delete(jobId);
+    for (const depId of deps ?? []) {
+      const dep = db.getJob(depId);
+      if (dep?.status === "done") continue;
+      const what = dep
+        ? `${dep.type}${dep.sceneId ? ` của scene "${dep.sceneId}"` : ""} (${depId})`
+        : `job ${depId}`;
+      return (
+        `${what} xếp cùng lượt render đã ${dep?.status ?? "biến mất"} - không chạy tiếp để khỏi ` +
+        "lắp bằng bản render cũ/bản draft. Xem log job đó, sửa lỗi rồi render lại."
+      );
+    }
+    return null;
   }
 
   /**
@@ -114,6 +147,7 @@ class RenderQueue {
     const idx = this.pending.indexOf(jobId);
     if (idx >= 0) {
       this.pending.splice(idx, 1);
+      this.deps.delete(jobId);
       db.updateJob(jobId, { status: "canceled", step: "Đã hủy", finishedAt: nowIso() });
       db.appendJobLog(jobId, "[queue] Job bị hủy khi đang chờ.");
       broadcastJob(jobId);
@@ -143,7 +177,10 @@ class RenderQueue {
       if (idx < 0) break;
       const jobId = this.pending.splice(idx, 1)[0];
       const job = db.getJob(jobId);
-      if (!job || job.status !== "queued") continue; // đã bị hủy trước khi tới lượt
+      if (!job || job.status !== "queued") {
+        this.deps.delete(jobId); // đã bị hủy trước khi tới lượt
+        continue;
+      }
       void this.runJob(jobId, busyKeyOf(job));
     }
   }
@@ -159,6 +196,8 @@ class RenderQueue {
     try {
       const fresh = db.getJob(jobId)!;
       ctx.job = fresh;
+      const unmet = this.unmetDependency(jobId);
+      if (unmet) throw new Error(unmet);
       if (fresh.type === "scene-draft" || fresh.type === "scene-final") {
         await runSceneRender(ctx);
       } else if (fresh.type === "image-gen") {

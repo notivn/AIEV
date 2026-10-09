@@ -120,23 +120,28 @@ function queryString(value: unknown): string {
 }
 
 /**
- * Đường được phép đi bằng TOKEN PHIÊN QR (`?k=`) - chỉ đủ cho trang /m trên
- * điện thoại: xem tên project, xem media, và upload file vào project.
+ * Đường được phép đi bằng TOKEN PHIÊN QR (`?k=`) - DANH SÁCH TRẮNG, đúng và chỉ
+ * đúng những gì trang /m trên điện thoại gọi (apps/web/src/app/m/[id]/page.tsx):
+ *  - GET  /api/projects/<id>   (getProject - hiện tên project)
+ *  - POST /api/assets          (upload; route còn kiểm token gắn ĐÚNG project)
+ *
+ * Trước đây là danh sách ĐEN ("mọi /api/projects/* trừ timeline, media-info")
+ * so khớp PHÂN BIỆT hoa thường, trong khi router Express thì KHÔNG: `/API/Projects/x/TIMELINE?k=`
+ * lọt qua rào rồi vẫn tới đúng route timeline (export.xml lộ đường dẫn tuyệt
+ * đối trên máy chủ, GET timeline chép logo vào project). Danh sách đen còn tự
+ * mở cửa cho mọi route mới mount dưới /api/projects. Nên đổi hẳn sang danh sách
+ * trắng, so trên đường dẫn đã chuẩn hóa GIỐNG cách Express khớp route: không
+ * phân biệt hoa thường và bỏ MỘT dấu "/" cuối (strict routing tắt) - không
+ * hơn, để không cho qua thứ mà router lại hiểu khác đi.
  */
+const UPLOAD_TOKEN_ROUTES: ReadonlyArray<{ method: string; re: RegExp }> = [
+  { method: "GET", re: /^\/api\/projects\/[^/]+$/ },
+  { method: "POST", re: /^\/api\/assets$/ },
+];
+
 function allowedForUploadToken(req: Request): boolean {
-  const p = req.path;
-  if (req.method === "GET") {
-    // Trừ các đường của trình chỉnh sửa: trang /m không cần tới, mà export.xml
-    // lộ đường dẫn tuyệt đối trên máy chủ, GET timeline có thể chép logo vào project
-    if (/^\/api\/projects\/[^/]+\/(timeline|media-info)(\/|$)/.test(p)) return false;
-    return (
-      p.startsWith("/media/") ||
-      p.startsWith("/api/projects/") ||
-      p === "/api/lan-info"
-    );
-  }
-  if (req.method === "POST") return p === "/api/assets";
-  return false;
+  const p = req.path.toLowerCase().replace(/(.)\/$/, "$1");
+  return UPLOAD_TOKEN_ROUTES.some((r) => r.method === req.method && r.re.test(p));
 }
 
 /**
