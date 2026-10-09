@@ -10,8 +10,10 @@
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ROOT = process.cwd();
+// Tính từ vị trí script, không theo process.cwd(): chạy từ gốc repo vẫn đúng
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const vi = readFileSync(join(ROOT, "src/lib/locales/vi.ts"), "utf8");
 const en = readFileSync(join(ROOT, "src/lib/locales/en.ts"), "utf8");
 const has = (src, k) => src.includes(`"${k}":`);

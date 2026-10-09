@@ -12,8 +12,11 @@
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ROOT = new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
+// fileURLToPath, không phải URL.pathname: pathname giữ nguyên %20 nên thư mục
+// có dấu cách (C:\Users\Nguyen Van A\…) sẽ không tìm thấy src/
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SRC = join(ROOT, "src");
 
 /** Cỡ chữ ngoài thang ba bậc (text-sm / text-meta / text-xs). */
