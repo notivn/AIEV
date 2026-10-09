@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Router } from "express";
-import { isAgentRunning, runAgent } from "../agent.js";
+import { isAgentBusy, runAgent } from "../agent.js";
 import {
   prepareEditSession,
   scaffoldProjectFiles,
@@ -457,7 +457,7 @@ router.post("/:id/edit", (req, res) => {
 
   // Bấm "Edit bằng AI" hai lần = hai agent cùng sửa + render một project. Chặn
   // như review/send đã chặn.
-  if (db.listChatSessions(id).some((s) => isAgentRunning(s.sessionId))) {
+  if (db.listChatSessions(id).some((s) => isAgentBusy(s.sessionId))) {
     throw new HttpError(
       409,
       "SESSION_BUSY",

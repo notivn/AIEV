@@ -358,6 +358,7 @@ export function ChatThread({
         flushStream();
         setStatus(session.status);
         setRunning(false);
+        setStartedAt(null);
         setJustFailed(session.status === "error");
       }
     }
@@ -432,6 +433,9 @@ export function ChatThread({
         setAgentError(e.error ?? t("chat.unknown-error"));
         setStatus("error");
         setRunning(false);
+        // Bỏ mốc của lượt vừa xong: lượt sau (kể cả bắt đầu qua SSE) phải có mốc
+        // riêng, không thì so runFinishedAt của lượt cũ sẽ tắt nhầm lượt mới
+        setStartedAt(null);
         setJustFailed(true);
         refreshSession();
         break;
@@ -443,6 +447,7 @@ export function ChatThread({
         flushStream();
         if (e.status) setStatus(e.status);
         setRunning(false);
+        setStartedAt(null);
         setJustFailed(e.status === "error");
         // refetch session để lấy runFinishedAt/status mới → dòng thời lượng
         refreshSession();
@@ -498,6 +503,7 @@ export function ChatThread({
     try {
       await interruptChat(current);
       setRunning(false);
+      setStartedAt(null);
       setStatus("interrupted");
       refreshSession();
     } catch (e) {

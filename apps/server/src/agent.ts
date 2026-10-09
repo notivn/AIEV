@@ -67,6 +67,14 @@ const interruptedSessions = new Set<string>();
 const pendingResumes = new Map<string, NodeJS.Timeout>();
 
 /**
+ * Đang chạy HOẶC đang hẹn giờ tự chạy lại (auto-resume / thử lại sau lỗi): cả
+ * hai đều sẽ còn sửa project, nên mở phiên mới lúc này là hai agent chồng nhau.
+ */
+export function isAgentBusy(sessionId: string): boolean {
+  return running.has(sessionId) || pendingResumes.has(sessionId);
+}
+
+/**
  * Hủy lượt auto-resume đang chờ (nếu có): clear timer + đóng mốc thời gian lượt chạy.
  * Trả về true nếu có timer để hủy.
  */

@@ -653,11 +653,11 @@ export default function TextToVideoDetailPage() {
       clearTimeout(flushTimer.current);
       flushTimer.current = null;
     }
-    if (inflight.current) {
-      const prevErr = await inflight.current;
-      if (Object.keys(pending.current).length === 0) return prevErr;
-    }
-    if (Object.keys(pending.current).length === 0) return null;
+    // Chờ tới khi KHÔNG còn lượt nào bay (vòng lặp, không phải if): hai người
+    // cùng chờ một lượt thì người dậy trước có thể vừa gửi lượt mới
+    let prevErr: string | null = null;
+    while (inflight.current) prevErr = await inflight.current;
+    if (Object.keys(pending.current).length === 0) return prevErr;
     const patch = pending.current;
     pending.current = {};
     const run = (async (): Promise<string | null> => {

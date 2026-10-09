@@ -358,11 +358,11 @@ export default function AutoCutDetailPage() {
       flushTimer.current = null;
     }
     const isEmpty = () => pending.current.size === 0 && !pendingBrief.current;
-    if (inflight.current) {
-      const prevErr = await inflight.current;
-      if (isEmpty()) return prevErr;
-    }
-    if (isEmpty()) return null;
+    // Chờ tới khi KHÔNG còn lượt nào bay (vòng lặp, không phải if): hai người
+    // cùng chờ một lượt thì người dậy trước có thể vừa gửi lượt mới
+    let prevErr: string | null = null;
+    while (inflight.current) prevErr = await inflight.current;
+    if (isEmpty()) return prevErr;
     const patches = [...pending.current.values()];
     const briefPatch = pendingBrief.current;
     pending.current.clear();

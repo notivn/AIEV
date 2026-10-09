@@ -703,11 +703,11 @@ export default function ProjectDetailPage() {
       clearTimeout(briefTimer.current);
       briefTimer.current = null;
     }
-    if (briefInflight.current) {
-      const prevErr = await briefInflight.current;
-      if (!briefDirty.current) return prevErr;
-    }
-    if (!briefDirty.current || !briefRef.current) return null;
+    // Chờ tới khi KHÔNG còn lượt nào bay (vòng lặp, không phải if): hai người
+    // cùng chờ một lượt thì người dậy trước có thể vừa gửi lượt mới
+    let prevErr: string | null = null;
+    while (briefInflight.current) prevErr = await briefInflight.current;
+    if (!briefDirty.current || !briefRef.current) return prevErr;
     briefDirty.current = false;
     const snapshot = briefRef.current;
     const run = (async (): Promise<string | null> => {
