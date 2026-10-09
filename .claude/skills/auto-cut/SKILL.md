@@ -98,6 +98,10 @@ body: { "cutCandidates": [{ "start": 51.81, "end": 52.25 }, …] }   # ONLY what
 -> 202 { job }
 ```
 
+`409 AUTO_CUT_DISABLED` means the project's brief has "Tự động cắt" switched OFF. That is the
+user's decision, not an error to work around: do not cut, and do not hand-roll ffmpeg instead. Say
+in the report that the switch is off; the user turns it on in the edit brief if they want the cut.
+
 Send an empty list if you approved nothing - the measured silences still get cut. Then poll
 `GET /api/jobs/<jobId>` until it finishes. The job:
 

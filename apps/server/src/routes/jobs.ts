@@ -4,7 +4,7 @@ import * as db from "../db.js";
 import { broadcast } from "../events.js";
 import { autoCutExists } from "../autoCutMeta.js";
 import { IMAGE_GEN_STEPS, imageProjectExists, type ImageGenStep } from "../imageMeta.js";
-import { projectExists } from "../meta.js";
+import { briefOf, projectExists, readMeta } from "../meta.js";
 import { isQcReportStale, readQcReport } from "../qc.js";
 import { queue } from "../queue.js";
 import { readRenderSettings } from "../renderSettings.js";
@@ -79,6 +79,16 @@ router.post("/", (req, res) => {
   } else {
     if (!projectExists(projectId)) {
       throw new HttpError(404, "PROJECT_NOT_FOUND", `Không tìm thấy project "${projectId}"`);
+    }
+
+    // Cùng cửa khóa với POST /:id/auto-trim/apply - không thì đây là lối vòng
+    // cắt footage của project đang TẮT "Tự động cắt" (CLAUDE.md 5.7)
+    if (type === "auto-trim" && !briefOf(readMeta(projectId)).autoCut) {
+      throw new HttpError(
+        409,
+        "AUTO_CUT_DISABLED",
+        `Project "${projectId}" đang TẮT "Tự động cắt ngắn video" - không cắt footage của video này.`,
+      );
     }
 
     // Quy tắc queue: từ chối job *-final nếu chưa có assemble-draft thành công cho project

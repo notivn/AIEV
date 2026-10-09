@@ -169,7 +169,7 @@ export async function runAssemble(ctx: JobCtx): Promise<void> {
   // không đụng - chỉ kẹp phần vượt quá, giữ nguyên output của manifest đang chạy tốt.
   {
     // Cách tính thời lượng frame khớp resolveSceneDurationInFrames bên Remotion:
-    // durationInFrames, hoặc scene srcVideo suy từ (to - from) * fps.
+    // durationInFrames, hoặc scene srcVideo suy từ round(to*fps) - round(from*fps).
     const frameOf = (scene: SceneMeta): number | null => {
       if (typeof scene.durationInFrames === "number") return scene.durationInFrames;
       if (

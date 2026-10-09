@@ -241,6 +241,9 @@ export default function ImageProjectDetailPage() {
   useEffect(() => {
     let alive = true;
     (async () => {
+      // Job đang bám lúc BẮT ĐẦU hỏi - bấm tạo ảnh trong lúc chờ thì danh sách về
+      // muộn sẽ không có job mới đó, không được gỡ nhầm card của nó
+      const seenId = activeJobIdRef.current;
       try {
         const jobs = await getJobs(50);
         const j = jobs.find(
@@ -257,7 +260,7 @@ export default function ImageProjectDetailPage() {
             step: j.step,
             status: j.status,
           });
-        } else if (alive && !lingerTimerRef.current) {
+        } else if (alive && !lingerTimerRef.current && activeJobIdRef.current === seenId) {
           activeJobIdRef.current = null;
           setActiveJob(null);
         }

@@ -61,7 +61,7 @@ export const sceneSchema = z.looseObject({
   to: z.number().min(0).optional(),
   /**
    * Độ dài scene tính theo frame. Bắt buộc với scene HyperFrames;
-   * scene srcVideo có thể bỏ trống nếu đã có from/to (suy ra (to-from)*fps).
+   * scene srcVideo có thể bỏ trống nếu đã có from/to (suy ra round(to*fps) - round(from*fps)).
    */
   durationInFrames: z.number().int().positive().optional(),
   /** MP4 đã render bởi HyperFrames (đường dẫn staging) — Remotion ưu tiên field này */

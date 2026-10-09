@@ -134,6 +134,9 @@ The backend picks the scene input set based on the job type - the Remotion code 
 - **Audio drifting out of sync toward the end**: a VBR voice mp3 -> convert it to CBR/WAV before putting it in the manifest (`ffmpeg -i voice.mp3 -ar 48000 voice.wav`).
 - **Color mismatch between HyperFrames scenes and footage**: both engines render through Chromium so they usually match; if they do not, check whether the footage has an unusual color space tag (`bt709` is the standard) - transcode the footage to bt709 first.
 - **Render hanging on Windows**: usually caused by Vietnamese characters/spaces in an asset file path - name asset files in ASCII kebab-case right from the import step.
+- **One black frame at every footage cut**: a `srcVideo` scene sized `round((to-from)*fps)` while `OffthreadVideo` plays `round(to*fps) - round(from*fps)` frames - the two differ by one (from=1.02, to=3.98 @30fps: 89 vs 88). Always round EACH END, never the difference; `resolveSceneDurationInFrames` and `frameOf` in `jobs/assemble.ts` must stay in lockstep with `SceneClip`.
+- **Whole render dies on one tiny cue** (`inputRange must be strictly monotonically increasing`): a fade written as `[0, 4, max(5, last-4), last]` is not increasing when a cue is 6 frames or less (a translated cue clamped near the end of the video is enough). Use `fadeInOut()` from `components/fade.ts` for any new track instead of hand-writing the range.
+- **Rendering on a machine with no network**: Remotion tries to download Chrome from `remotion.media`. Pass `--browser-executable=<local chrome/headless_shell>` instead.
 
 ## Remotion license (keep in mind when scaling up)
 

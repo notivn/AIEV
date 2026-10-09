@@ -1001,6 +1001,7 @@ auto-trim (projectId = video project, sceneId = mức natural|default|tight).
 "text-to-video" KHÔNG tạo tay được - chỉ sinh qua POST /api/text-to-video/:id/build.
 `auto-trim` tạo thẳng qua POST /api/jobs thì chạy với mức trong brief và KHÔNG có ứng viên mỡ thừa
 nào được duyệt - muốn truyền `cutCandidates` thì phải đi qua POST /api/projects/:id/auto-trim/apply.
+Cả hai đường đều trả 409 AUTO_CUT_DISABLED khi brief của project TẮT "Tự động cắt" (`brief.autoCut = false`).
 
 GET  /api/jobs?limit=50&projectId=  → Job[] (mới nhất trước; projectId lọc theo project - tùy chọn)
 GET  /api/jobs/:id              → Job & { log: string }

@@ -399,7 +399,9 @@ export function buildEditPrompt(input: {
     // Công tắc TẮT phải được NÓI RA (CLAUDE.md 5.7): meta.json có thể còn sót
     // videoStyleId từ lần bật trước, im lặng là agent đọc nó rồi làm theo
     lines.push(
-      "## PHONG CÁCH DỰNG: TẮT\n" +
+      (brief.videoStyleEnabled
+        ? "## PHONG CÁCH DỰNG: chưa chọn phong cách nào\n"
+        : "## PHONG CÁCH DỰNG: TẮT\n") +
         "Không áp phong cách dựng nào - BỎ QUA `brief.videoStyleId` trong meta.json (nếu có). " +
         "Dựng theo đúng skill + Style Design.",
     );

@@ -13,6 +13,7 @@ import {
 } from "./config.js";
 import { autoResumeStartup } from "./agent.js";
 import { scanAutoCuts, patchAutoCut } from "./autoCutMeta.js";
+import { patchTranslateVideo, scanTranslateVideos } from "./translateVideoMeta.js";
 import { failStaleRunningJobs, hasActiveJobForProject } from "./db.js";
 import { addSseClient } from "./events.js";
 import { HttpError, cookieValue, isLocalRequest, secretEquals } from "./util.js";
@@ -60,15 +61,33 @@ import mediaRouter from "./routes/media.js";
 ensureBaseDirs();
 // Job còn treo "running" từ lần chạy trước (server bị tắt giữa chừng) → failed
 failStaleRunningJobs();
-// Phiên cắt tự động kẹt "planning"/"cutting" vì job của nó vừa bị đánh failed ở
-// trên: catch của job không bao giờ chạy, nên không ai lùi trạng thái - phiên
-// trả 409 BUSY mãi mãi (kể cả không xóa được). Ghi failed như job tự ghi khi lỗi.
+// Phiên kẹt trạng thái "đang chạy" vì job của nó vừa bị đánh failed ở trên (hoặc
+// /translate đồng bộ chết theo tiến trình): catch của job không bao giờ chạy, nên
+// không ai lùi trạng thái - phiên trả 409 BUSY mãi mãi (kể cả không xóa được).
+// Chỉ quét LÚC KHỞI ĐỘNG: lúc này chắc chắn không có gì đang chạy thật, còn quét
+// lúc đọc thì sẽ chữa nhầm phiên vừa bị hủy mà job chưa kịp dừng hẳn.
 for (const m of scanAutoCuts()) {
   if ((m.status === "planning" || m.status === "cutting") && !hasActiveJobForProject(m.id)) {
     patchAutoCut(m.id, {
       status: "failed",
       error: "Server khởi động lại giữa chừng - chạy lại bước này.",
       failedStep: m.status === "planning" ? "plan" : "cut",
+    });
+  }
+}
+for (const m of scanTranslateVideos()) {
+  if (
+    (m.status === "transcribing" || m.status === "rendering" || m.status === "translating") &&
+    !hasActiveJobForProject(m.id)
+  ) {
+    patchTranslateVideo(m.id, {
+      status:
+        m.status === "rendering" && m.cues.length > 0
+          ? "translated"
+          : m.transcriptFile
+            ? "transcribed"
+            : "draft",
+      error: `Bước "${m.status}" bị dừng giữa chừng vì server khởi động lại - chạy lại bước đó.`,
     });
   }
 }

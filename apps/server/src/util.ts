@@ -188,6 +188,9 @@ export function killTree(child: ChildProcess): void {
       windowsHide: true,
     });
   } else {
+    // Đã thoát rồi thì pid có thể đã bị tiến trình KHÁC dùng lại - đừng giết
+    // nhầm; con cháu của nó cũng đã được hệ thống nhận nuôi, không còn tìm được
+    if (child.exitCode !== null || child.signalCode !== null) return;
     // child.kill chỉ giết tiến trình trực tiếp (node của remotion/hyperframes);
     // Chromium + ffmpeg nó đẻ ra sẽ mồ côi và chạy tiếp tới hết render. Gom cả
     // cây con cháu qua `ps` rồi giết từ lá lên.
