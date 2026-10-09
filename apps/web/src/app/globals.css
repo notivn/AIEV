@@ -62,6 +62,26 @@
   --chart-2: #2f6fed;
   --chart-3: #0d9488;
 
+  /* Track timeline của trình chỉnh sửa (/projects/[id]/editor) - mỗi track một
+     cặp: màu đậm (viền khối, vạch nhận diện) + nền nhạt (thân khối). Chữ trên
+     khối luôn là --text nên nền phải đủ nhạt cho cả hai theme. */
+  --track-scene: #2f6fed;
+  --track-scene-bg: #e7eefd;
+  --track-highlight: #d9480f;
+  --track-highlight-bg: #fdeee6;
+  --track-caption: #7c3aed;
+  --track-caption-bg: #f1ebfd;
+  --track-subtitle: #0d9488;
+  --track-subtitle-bg: #e3f4f2;
+  --track-sfx: #b45309;
+  --track-sfx-bg: #fbf1e1;
+  --track-voice: #16a34a;
+  --track-voice-bg: #e7f6ec;
+  --track-music: #be185d;
+  --track-music-bg: #fce8f1;
+  /* Vạch hít (snap) khi kéo - khác màu playhead để không lẫn */
+  --timeline-snap: #2f6fed;
+
   /* Shape & motion */
   --radius: 8px;
   --radius-lg: 12px;
@@ -92,6 +112,22 @@
      bằng validator dataviz trên nền --surface dark: pass đủ 5 check. */
   --chart-2: #5b8def;
   --chart-3: #27ab92;
+
+  --track-scene: #5b8def;
+  --track-scene-bg: #1c2740;
+  --track-highlight: #f0742e;
+  --track-highlight-bg: #3a2519;
+  --track-caption: #a78bfa;
+  --track-caption-bg: #282042;
+  --track-subtitle: #27ab92;
+  --track-subtitle-bg: #143029;
+  --track-sfx: #e0a03b;
+  --track-sfx-bg: #33291a;
+  --track-voice: #2ebd6b;
+  --track-voice-bg: #17301f;
+  --track-music: #e06aa6;
+  --track-music-bg: #3a1a2b;
+  --timeline-snap: #5b8def;
 
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
@@ -1058,5 +1094,463 @@ textarea.input {
   .workspace-shimmer::after {
     animation: none;
   }
+}
+
+/* ---------------- Trình chỉnh sửa video (/projects/[id]/editor) ----------------
+
+   Màn hình công cụ DUY NHẤT của app (skill webui-design mục 12). Từ 1100px trở
+   lên: bố cục cố định đúng một màn hình - thanh trên, [trình phát | inspector],
+   timeline dưới cùng kéo cao được; trang không cuộn, mỗi vùng tự cuộn. Hẹp hơn:
+   xếp dọc (trình phát trên inspector), trang cuộn dọc, timeline vẫn cuộn ngang
+   bên trong chính nó - không bao giờ có thanh cuộn ngang của cả trang.
+
+   Chiều cao 100dvh - 96px = trừ topbar 56px của shell và padding 20px trên/dưới
+   của <main>. */
+.editor-root {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.editor-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.editor-center {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+/* Khung quanh trình phát - PreviewPlayer cần một chiều cao XÁC ĐỊNH */
+.editor-stage {
+  position: relative;
+  height: min(60vh, 560px);
+  min-height: 240px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+  overflow: hidden;
+  padding: 8px;
+}
+.editor-inspector {
+  min-width: 0;
+}
+@media (min-width: 1100px) {
+  .editor-root {
+    height: calc(100dvh - 96px);
+    min-height: 560px;
+  }
+  .editor-main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 340px;
+    flex: 1 1 0;
+    min-height: 0;
+  }
+  .editor-center {
+    min-height: 0;
+  }
+  .editor-stage {
+    height: auto;
+    flex: 1 1 0;
+    min-height: 0;
+  }
+  .editor-inspector {
+    min-height: 0;
+    overflow-y: auto;
+  }
+}
+
+/* Chỉ đọc (AI đang sửa project): cả form inspector nằm trong <fieldset disabled> -
+   ô nhập phải TRÔNG như bị khóa, không thì người dùng gõ mãi không hiểu vì sao */
+.editor-inspector fieldset:disabled .input {
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+/* Tay nắm kéo cao timeline - dải mỏng, có vạch ở giữa để nhìn ra là kéo được */
+.editor-resize {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 8px;
+  margin: -6px 0;
+  cursor: ns-resize;
+  touch-action: none;
+  color: var(--text-muted);
+}
+.editor-resize::before {
+  content: "";
+  width: 40px;
+  height: 3px;
+  border-radius: 9999px;
+  background: var(--border);
+  transition: background-color var(--transition);
+}
+.editor-resize:hover::before,
+.editor-resize:focus-visible::before {
+  background: var(--text-muted);
+}
+.editor-resize:focus-visible {
+  outline: none;
+}
+
+/* ---- Timeline ---- */
+.tl {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.tl-scroll {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.tl-content {
+  position: relative;
+  min-width: 100%;
+  min-height: 100%;
+}
+.tl-ruler {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: flex;
+  height: 28px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.tl-ruler-lane {
+  position: relative;
+  flex: 1 1 auto;
+  cursor: pointer;
+  touch-action: none;
+}
+.tl-tick {
+  position: absolute;
+  bottom: 0;
+  width: 1px;
+  height: 6px;
+  background: var(--border);
+}
+.tl-tick.is-major {
+  height: 10px;
+  background: var(--text-muted);
+}
+.tl-tick-label {
+  position: absolute;
+  top: 4px;
+  transform: translateX(7px);
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-muted);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.tl-row {
+  display: flex;
+  height: 36px;
+  border-bottom: 1px solid var(--border);
+}
+.tl-label {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.tl-label-swatch {
+  width: 3px;
+  height: 14px;
+  flex: none;
+  border-radius: 9999px;
+  background: var(--block-fg);
+}
+.tl-lane {
+  position: relative;
+  flex: 1 1 auto;
+}
+.tl-empty {
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  transform: translateY(-50%);
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Màu theo track - khối, vạch nhận diện ở nhãn và vạch chồng lấn đọc chung */
+[data-track="scene"] {
+  --block-fg: var(--track-scene);
+  --block-bg: var(--track-scene-bg);
+}
+[data-track="overlay"] {
+  --block-fg: var(--track-highlight);
+  --block-bg: var(--track-highlight-bg);
+}
+[data-track="caption"] {
+  --block-fg: var(--track-caption);
+  --block-bg: var(--track-caption-bg);
+}
+[data-track="subtitle"] {
+  --block-fg: var(--track-subtitle);
+  --block-bg: var(--track-subtitle-bg);
+}
+[data-track="sfx"] {
+  --block-fg: var(--track-sfx);
+  --block-bg: var(--track-sfx-bg);
+}
+[data-track="voice"] {
+  --block-fg: var(--track-voice);
+  --block-bg: var(--track-voice-bg);
+}
+[data-track="music"] {
+  --block-fg: var(--track-music);
+  --block-bg: var(--track-music-bg);
+}
+
+.tl-block {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 2px;
+  padding: 0 8px;
+  overflow: hidden;
+  border: 1px solid var(--block-fg);
+  border-left-width: 3px;
+  border-radius: 6px;
+  background: var(--block-bg);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.tl-block > .tl-block-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tl-block > svg {
+  flex: none;
+  color: var(--block-fg);
+}
+.tl-block:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+.tl-block[data-selected="true"] {
+  z-index: 1;
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
+}
+.tl-block.is-static {
+  cursor: pointer;
+}
+.tl-block.is-readonly {
+  cursor: default;
+}
+.tl-block.is-dragging {
+  z-index: 2;
+  cursor: grabbing;
+  opacity: 0.85;
+  box-shadow: var(--shadow-card);
+}
+.tl-block.is-invalid {
+  border-style: dashed;
+  border-color: var(--danger);
+}
+/* Mép kéo trim/đổi độ dài - vùng bấm 8px, hiện vạch khi rê vào */
+.tl-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  width: 8px;
+  cursor: ew-resize;
+}
+.tl-handle.is-start {
+  left: -1px;
+}
+.tl-handle.is-end {
+  right: -1px;
+}
+.tl-handle::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 3px;
+  width: 2px;
+  border-radius: 9999px;
+  background: var(--block-fg);
+  opacity: 0;
+  transition: opacity var(--transition);
+}
+.tl-block:hover .tl-handle::after,
+.tl-block[data-selected="true"] .tl-handle::after {
+  opacity: 1;
+}
+/* Chỗ hai scene chồng lấn (crossfade) - sọc chéo màu của track */
+.tl-overlap {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  z-index: 1;
+  border-radius: 6px;
+  background: repeating-linear-gradient(
+    135deg,
+    var(--block-fg) 0 2px,
+    transparent 2px 6px
+  );
+  opacity: 0.45;
+  pointer-events: none;
+}
+.tl-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--primary);
+  pointer-events: none;
+}
+.tl-playhead-knob {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  border-radius: 0 0 6px 6px;
+  background: var(--primary);
+  pointer-events: none;
+}
+.tl-snap {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  width: 0;
+  border-left: 1px dashed var(--timeline-snap);
+  pointer-events: none;
+}
+.tl-drop {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  z-index: 3;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 9999px;
+  background: var(--timeline-snap);
+  pointer-events: none;
+}
+
+/* Chip từ karaoke trong inspector: bấm để sửa, từ nhấn (hi) tô màu thương hiệu */
+.word-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--surface);
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color var(--transition), background-color var(--transition);
+}
+.word-chip:hover {
+  border-color: var(--text-muted);
+}
+.word-chip.is-hi {
+  color: var(--primary);
+  font-weight: 600;
+}
+.word-chip[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+/* Menu thả xuống của thanh trên - mục menu, không phải nút rời */
+.editor-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 240px;
+  margin-top: 4px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.editor-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+  transition: background-color var(--transition);
+}
+.editor-menu-item:hover:not(:disabled),
+.editor-menu-item:focus-visible {
+  background: var(--bg-subtle);
+  outline: none;
+}
+.editor-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text);
+  white-space: nowrap;
 }
 }

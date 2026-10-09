@@ -49,6 +49,7 @@ import {
   Play,
   Plus,
   Sparkles,
+  SquarePen,
   Trash2,
   X,
 } from "lucide-react";
@@ -1095,6 +1096,23 @@ export default function ProjectDetailPage() {
                 <ArrowLeft size={15} strokeWidth={2} />
                 {t("project.back")}
               </Button>
+              {/* Trình chỉnh sửa cần ít nhất một scene để có gì mà xem/sửa - chưa
+                  có thì nút vẫn hiện (người dùng biết là có tính năng) nhưng tắt,
+                  kèm lý do ở tooltip + mô tả cho trình đọc màn hình. */}
+              <Button
+                disabled={scenes.length === 0}
+                title={scenes.length === 0 ? t("project.open-editor-hint") : undefined}
+                aria-describedby={scenes.length === 0 ? "open-editor-hint" : undefined}
+                onClick={() => router.push(`/projects/${encodeURIComponent(projectId)}/editor`)}
+              >
+                <SquarePen size={15} strokeWidth={2} />
+                {t("project.open-editor")}
+              </Button>
+              {scenes.length === 0 && (
+                <span id="open-editor-hint" className="sr-only">
+                  {t("project.open-editor-hint")}
+                </span>
+              )}
             </span>
             <span className="flex items-center border-l border-[var(--border)] pl-2">
               <Button variant="destructive" onClick={() => setDeleteOpen(true)}>

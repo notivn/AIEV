@@ -3826,6 +3826,11 @@ export interface TimelinePreview {
   watermark: { file: string; position: "top-left" } | null;
   /** relPath (tương đối project) → thông số thật của mọi file timeline tham chiếu. */
   media: Record<string, TimelineMediaInfo>;
+  /**
+   * relPath → mtimeMs của mọi file media timeline tham chiếu - trình phát gắn
+   * `?v=` để file render lại cùng đường dẫn được nạp lại. Server cũ: vắng mặt.
+   */
+  mediaVersions?: Record<string, number>;
 }
 
 export interface TimelineLock {

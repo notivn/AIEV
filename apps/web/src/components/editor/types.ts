@@ -1,96 +1,58 @@
 /**
- * Kiểu dữ liệu của trình chỉnh sửa video - khớp response
- * `GET /api/projects/:id/timeline` (docs/EDITOR-PLAN.md mục 2.2).
+ * Kiểu dữ liệu của trình chỉnh sửa video - BÍ DANH của họ `Timeline*` trong
+ * `@/lib/api` (khớp response `GET /api/projects/:id/timeline`, docs/EDITOR-PLAN.md
+ * mục 2.2).
  *
- * Phần tử con (scene, cue, sfx…) lấy thẳng KIỂU ĐẦU VÀO (`z.input`) của schema
- * zod bên engine (engines/remotion/src/manifest.ts): đó là hình dạng của
- * meta.json TRƯỚC khi parse - field có default (srcImage, sfx, music…) được
- * phép thiếu, và field lạ do agent ghi thêm vẫn nằm trong kiểu (looseObject),
- * nên editor sửa trên bản sao là giữ nguyên được chúng (mục 1 của plan).
+ * Chỉ có MỘT bộ kiểu: store của editor giữ đúng thứ `getTimeline` trả về và đưa
+ * thẳng vào <PreviewPlayer> - không ép kiểu, không chuyển đổi qua lại. Trước đây
+ * file này dựng bộ thứ hai từ `z.input` của zod bên engine; hai bộ lệch nhau ở
+ * vài chỗ (srcImage, subtitleStyle null) là đủ để mỗi lần truyền dữ liệu phải
+ * cast. Hình dạng thật vẫn bám schema ở engines/remotion/src/manifest.ts - và
+ * PreviewPlayer luôn chạy `manifestSchema.safeParse` trước khi phát, nên chỗ
+ * nào lệch thì hiện thành lỗi chứ không lọt qua.
+ *
+ * Mọi object đều mở `[key: string]: unknown`: field lạ do agent ghi thêm vẫn
+ * nằm trong kiểu, nên editor sửa trên bản sao là giữ nguyên được chúng.
  *
  * Mọi đường dẫn media trong timeline là TƯƠNG ĐỐI THƯ MỤC PROJECT
  * (`assets/x.mp4`, `renders/s1.mp4`) - không phải `staging/...` như
  * props.resolved.json của render.
  */
 
-import type { z } from "zod";
 import type {
-  captionCueSchema,
-  captionWordSchema,
-  highlightCueSchema,
-  highlightPartSchema,
-  musicSchema,
-  sceneSchema,
-  sfxSchema,
-  subtitleCueSchema,
-  subtitleStyleSchema,
-  zoomSchema,
-} from "@engine/manifest";
+  Timeline,
+  TimelineAudio,
+  TimelineCaptionCue,
+  TimelineCaptionWord,
+  TimelineHighlightCue,
+  TimelineHighlightPart,
+  TimelineMediaInfo,
+  TimelineMusic,
+  TimelinePreview,
+  TimelineProject,
+  TimelineScene,
+  TimelineSfx,
+  TimelineSubtitleCue,
+  TimelineSubtitleStyle,
+  TimelineZoom,
+} from "@/lib/api";
 
-export type EditorScene = z.input<typeof sceneSchema>;
-export type EditorZoom = z.input<typeof zoomSchema>;
-export type EditorSfx = z.input<typeof sfxSchema>;
-export type EditorMusic = z.input<typeof musicSchema>;
-export type EditorCaptionWord = z.input<typeof captionWordSchema>;
-export type EditorCaptionCue = z.input<typeof captionCueSchema>;
-export type EditorSubtitleCue = z.input<typeof subtitleCueSchema>;
-export type EditorSubtitleStyle = z.input<typeof subtitleStyleSchema>;
-export type EditorHighlightPart = z.input<typeof highlightPartSchema>;
-export type EditorHighlightCue = z.input<typeof highlightCueSchema>;
-
-/** `audio` của meta.json - server điền mặc định `{ voice: null, sfx: [], music: null }` */
-export interface EditorAudio {
-  voice: string | null;
-  sfx: EditorSfx[];
-  music: EditorMusic | null;
-  /** field lạ trong audio - giữ nguyên khi ghi lại */
-  [key: string]: unknown;
-}
-
+export type EditorScene = TimelineScene;
+export type EditorZoom = TimelineZoom;
+export type EditorSfx = TimelineSfx;
+export type EditorMusic = TimelineMusic;
+export type EditorCaptionWord = TimelineCaptionWord;
+export type EditorCaptionCue = TimelineCaptionCue;
+export type EditorSubtitleCue = TimelineSubtitleCue;
+export type EditorSubtitleStyle = TimelineSubtitleStyle;
+export type EditorHighlightPart = TimelineHighlightPart;
+export type EditorHighlightCue = TimelineHighlightCue;
+export type EditorAudio = TimelineAudio;
 /** Các khóa top-level của meta.json mà editor được ghi (plan mục 1). */
-export interface EditorTimeline {
-  /** Thứ tự = thứ tự phát; `from`/`to` là GIÂY trong file nguồn */
-  scenes: EditorScene[];
-  audio: EditorAudio;
-  /** FRAME tuyệt đối (cả `words[].start/end`) */
-  captions: EditorCaptionCue[];
-  /** FRAME tuyệt đối */
-  subtitles: EditorSubtitleCue[];
-  /** Tùy chọn - thiếu (hoặc null) = kiểu mặc định giống CaptionTrack */
-  subtitleStyle?: EditorSubtitleStyle | null;
-  /** Thẻ highlight - FRAME tuyệt đối */
-  overlays: EditorHighlightCue[];
-}
-
+export type EditorTimeline = Timeline;
 /** `project` trong response GET /timeline. */
-export interface EditorProjectInfo {
-  id: string;
-  name: string;
-  width: number;
-  height: number;
-  fps: number;
-  status: string;
-  /** ISO; null khi meta.json chưa từng ghi mốc này */
-  updatedAt: string | null;
-}
-
+export type EditorProjectInfo = TimelineProject;
 /** Thời lượng/kích thước thật của một file media (ffprobe, cache theo mtime). */
-export interface EditorMediaInfo {
-  durationSec: number | null;
-  width?: number;
-  height?: number;
-  hasAudio?: boolean;
-}
-
+export type EditorMediaInfo = TimelineMediaInfo;
 /** `preview` trong response GET /timeline - dữ liệu chỉ dùng để XEM TRƯỚC. */
-export interface EditorPreview {
-  /**
-   * File MP4 xem trước (tương đối project) cho scene HyperFrames, theo id
-   * scene: ưu tiên renders/<id>.mp4 (final) rồi .draft.mp4; null = chưa render.
-   */
-  sceneRenders: Record<string, string | null>;
-  /** Logo đóng góc của Style Design - giống jobs/assemble.ts (syncBrandLogo) */
-  watermark: null | { file: string; position: "top-left" };
-  /** Theo relPath của mọi file media mà timeline tham chiếu */
-  media: Record<string, EditorMediaInfo>;
-}
+export type EditorPreview = TimelinePreview;

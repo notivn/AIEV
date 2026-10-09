@@ -180,6 +180,8 @@ export function ChatThread({
   onSessionCreated,
   compact = false,
   providersEnabled = false,
+  send,
+  emptyText,
 }: {
   sessionId: string | null;
   projectId?: string;
@@ -194,6 +196,19 @@ export function ChatThread({
   compact?: boolean;
   /** Cho chọn model/mode khi tạo phiên MỚI (hàng select nhỏ phía trên input). */
   providersEnabled?: boolean;
+  /**
+   * Gửi tin qua endpoint KHÁC /api/chat (vd trình chỉnh sửa gửi qua
+   * POST /projects/:id/editor/chat). Nhận sessionId hiện tại (undefined = phiên
+   * mới) và model/effort khi tạo phiên mới; trả sessionId như sendChat. Bỏ trống
+   * = sendChat mặc định (kèm projectId khi tạo phiên).
+   */
+  send?: (
+    message: string,
+    sessionId: string | undefined,
+    opts?: { model?: string; effort?: AgentEffort }
+  ) => Promise<{ sessionId: string }>;
+  /** Câu gợi ý lúc chưa có tin nhắn nào - mặc định là câu chung của chat */
+  emptyText?: string;
 }) {
   const { t, tf } = useT();
   const [messages, setMessages] = useState<UiMessage[]>([]);
@@ -476,13 +491,16 @@ export function ChatThread({
     setJustFailed(false);
     try {
       const current = activeIdRef.current;
-      const res = await sendChat(
-        message,
-        current ?? undefined,
-        current ? undefined : projectId,
-        // model/effort chỉ gửi khi TẠO session mới - session cũ giữ model đã lưu
-        !current && providersEnabled ? { model, effort } : undefined
-      );
+      // model/effort chỉ gửi khi TẠO session mới - session cũ giữ model đã lưu
+      const opts = !current && providersEnabled ? { model, effort } : undefined;
+      const res = send
+        ? await send(message, current ?? undefined, opts)
+        : await sendChat(
+            message,
+            current ?? undefined,
+            current ? undefined : projectId,
+            opts
+          );
       if (res.sessionId !== current) {
         activeIdRef.current = res.sessionId;
         onSessionCreated?.(res.sessionId);
@@ -618,7 +636,7 @@ export function ChatThread({
         {messages.length === 0 && !streamText && !loadError && !running && (
           <EmptyState
             icon={MessageSquare}
-            description={t("chat.empty")}
+            description={emptyText ?? t("chat.empty")}
           />
         )}
         {visibleMessages.map((m, i) => (

@@ -71,13 +71,28 @@ const FONT_PREFIX = "fonts/";
 /**
  * Resolver media cho trình phát: `fonts/…` → font overlay của engine, còn lại
  * là đường dẫn tương đối thư mục project.
+ *
+ * `mediaVersions` (relPath → mtimeMs, từ `preview.mediaVersions`) thêm `?v=` vào
+ * URL: scene render lại GHI ĐÈ đúng đường dẫn cũ (renders/<id>.mp4), không có
+ * phiên bản thì trình duyệt phát mãi bản trong cache. Thiếu version = không `?v`.
+ * Font không bao giờ gắn version (file tĩnh của engine).
  */
-export function projectMediaResolver(projectId: string): MediaResolver {
+export function projectMediaResolver(
+  projectId: string,
+  mediaVersions?: Record<string, number> | null,
+): MediaResolver {
   const projectBase = `video-projects/${encodeURIComponent(projectId)}`;
-  return (rel: string) =>
-    rel.startsWith(FONT_PREFIX)
-      ? mediaUrl(`remotion-fonts/${encodeSegments(rel.slice(FONT_PREFIX.length))}`)
-      : mediaUrl(`${projectBase}/${encodeSegments(rel)}`);
+  return (rel: string) => {
+    if (rel.startsWith(FONT_PREFIX)) {
+      return mediaUrl(`remotion-fonts/${encodeSegments(rel.slice(FONT_PREFIX.length))}`);
+    }
+    const version = mediaVersions?.[rel];
+    const query =
+      typeof version === "number" && Number.isFinite(version)
+        ? `?v=${encodeURIComponent(String(Math.round(version)))}`
+        : "";
+    return mediaUrl(`${projectBase}/${encodeSegments(rel)}${query}`);
+  };
 }
 
 // ---------------------------------------------------------------- manifest
@@ -119,6 +134,9 @@ const sceneFrames = (scene: EditorScene, fps: number): number | null => {
  * - kẹp `transitionOverlap` về min(scene này, scene kế);
  * - watermark := preview.watermark.
  * Không bao giờ ném lỗi: sai schema → `{ ok: false, issues }`.
+ * Khóa top-level `null` (captions/subtitles/overlays/subtitleStyle/audio - meta
+ * do agent ghi tay có thể có) coi như VẮNG MẶT → mặc định, đúng như server
+ * chuẩn hóa trước khi render.
  *
  * Không đụng vào object đầu vào (scene được sao nông trước khi sửa).
  */
@@ -219,11 +237,16 @@ export function buildPreviewManifest({
 type PreviewInputProps = {
   manifest: Manifest;
   projectId: string;
+  /** relPath → mtimeMs; identity giữ ổn định theo NỘI DUNG (xem PreviewPlayer) */
+  mediaVersions: Record<string, number> | null;
 };
 
 /** Composition chạy trong Player: Assemble bọc resolver media của project. */
-const PreviewComposition = ({ manifest, projectId }: PreviewInputProps) => {
-  const resolve = useMemo(() => projectMediaResolver(projectId), [projectId]);
+const PreviewComposition = ({ manifest, projectId, mediaVersions }: PreviewInputProps) => {
+  const resolve = useMemo(
+    () => projectMediaResolver(projectId, mediaVersions),
+    [projectId, mediaVersions],
+  );
   return (
     <MediaResolverProvider resolve={resolve}>
       <Assemble {...manifest} />
@@ -265,10 +288,27 @@ export function PreviewPlayer({
     [timeline, project, preview],
   );
 
+  // Version media giữ identity theo NỘI DUNG: GET /timeline trả object mới mỗi
+  // lần tải lại dù không file nào đổi - đổi identity là resolver đổi, mọi thẻ
+  // media nạp lại từ đầu.
+  const versionsKey = JSON.stringify(preview.mediaVersions ?? null);
+  const mediaVersions = useMemo<Record<string, number> | null>(
+    () => {
+      const parsed: unknown = JSON.parse(versionsKey);
+      if (!parsed || typeof parsed !== "object") return null;
+      const out: Record<string, number> = {};
+      for (const [rel, v] of Object.entries(parsed)) {
+        if (typeof v === "number") out[rel] = v;
+      }
+      return out;
+    },
+    [versionsKey],
+  );
+
   // inputProps đổi identity là Player render lại cả cây - chỉ đổi khi dữ liệu đổi
   const inputProps = useMemo<PreviewInputProps | null>(
-    () => (build.ok ? { manifest: build.manifest, projectId } : null),
-    [build, projectId],
+    () => (build.ok ? { manifest: build.manifest, projectId, mediaVersions } : null),
+    [build, projectId, mediaVersions],
   );
 
   const errorFallback: ErrorFallback = useCallback(
