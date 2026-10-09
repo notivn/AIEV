@@ -281,6 +281,8 @@ export default function AutoCutDetailPage() {
   // chung một PATCH để hai thứ sửa cùng lúc không đè nhau.
   const [brief, setBrief] = useState<Brief | null>(null);
   const pendingBrief = useRef<Partial<Brief> | null>(null);
+  /** PATCH đang bay - flush sau phải chờ nó, kẻo bước kế tiếp chạy trước khi lưu xong */
+  const inflight = useRef<Promise<string | null> | null>(null);
 
   // Job auto-cut mới nhất của phiên - nguồn hiển thị % và tên bước
   const [job, setJob] = useState<Job | null>(null);
@@ -345,25 +347,52 @@ export default function AutoCutDetailPage() {
 
   // ---- Sửa đoạn: gộp thay đổi rồi PATCH một lần ----
 
-  const flush = useCallback(async () => {
+  /**
+   * Gửi thay đổi đang chờ. Trả về thông báo lỗi (null = đã lưu / không có gì).
+   * Lưu hỏng thì TRẢ patch về hàng chờ (thay đổi sau thắng) và người gọi phải
+   * dừng - cắt tiếp là cắt theo lựa chọn cũ ở server.
+   */
+  const flush = useCallback(async (): Promise<string | null> => {
     if (flushTimer.current) {
       clearTimeout(flushTimer.current);
       flushTimer.current = null;
     }
-    if (pending.current.size === 0 && !pendingBrief.current) return;
+    const isEmpty = () => pending.current.size === 0 && !pendingBrief.current;
+    if (inflight.current) {
+      const prevErr = await inflight.current;
+      if (isEmpty()) return prevErr;
+    }
+    if (isEmpty()) return null;
     const patches = [...pending.current.values()];
     const briefPatch = pendingBrief.current;
     pending.current.clear();
     pendingBrief.current = null;
+    const run = (async (): Promise<string | null> => {
+      try {
+        const s = await updateAutoCut(sessionId, {
+          ...(patches.length > 0 ? { segments: patches } : {}),
+          ...(briefPatch ? { brief: briefPatch } : {}),
+        });
+        setSession(s);
+        setSaveError(null);
+        return null;
+      } catch (e) {
+        for (const p of patches) {
+          pending.current.set(p.index, { ...p, ...(pending.current.get(p.index) ?? {}) });
+        }
+        if (briefPatch) {
+          pendingBrief.current = { ...briefPatch, ...(pendingBrief.current ?? {}) };
+        }
+        const msg = e instanceof Error ? e.message : String(e);
+        setSaveError(msg);
+        return msg;
+      }
+    })();
+    inflight.current = run;
     try {
-      const s = await updateAutoCut(sessionId, {
-        ...(patches.length > 0 ? { segments: patches } : {}),
-        ...(briefPatch ? { brief: briefPatch } : {}),
-      });
-      setSession(s);
-      setSaveError(null);
-    } catch (e) {
-      setSaveError(e instanceof Error ? e.message : String(e));
+      return await run;
+    } finally {
+      if (inflight.current === run) inflight.current = null;
     }
   }, [sessionId]);
 
@@ -440,7 +469,11 @@ export default function AutoCutDetailPage() {
     setActionError(null);
     try {
       // Gửi nốt sửa đổi đang chờ trước khi cắt - server phải thấy đúng lựa chọn
-      await flush();
+      const saveErr = await flush();
+      if (saveErr) {
+        setActionError(saveErr);
+        return;
+      }
       const j = step === "plan" ? await planAutoCut(sessionId) : await cutAutoCut(sessionId);
       setJob(j);
       await load();

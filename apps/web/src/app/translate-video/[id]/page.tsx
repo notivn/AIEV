@@ -518,6 +518,8 @@ function DubSettingsCard({
   // Nghe thử: một audio dùng chung - mỗi lúc chỉ một câu được phát
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const urlRef = useRef<string | null>(null);
+  /** false sau khi unmount - nghe thử về muộn thì không phát nữa */
+  const mountedRef = useRef(true);
   const [playing, setPlaying] = useState<string | null>(null);
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
   const [results, setResults] = useState<Record<string, DubPreviewResult>>({});
@@ -569,7 +571,9 @@ function DubSettingsCard({
 
   // Rời trang giữa lúc đang nghe → tắt tiếng, không để audio chạy mồ côi
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
       audioRef.current?.pause();
       audioRef.current = null;
       if (urlRef.current) URL.revokeObjectURL(urlRef.current);
@@ -606,6 +610,9 @@ function DubSettingsCard({
         // trong header, và đó chính là giọng bản dựng thật sẽ dùng
         ...(voice ? { voice } : {}),
       });
+      // Đọc thử mất vài giây: rời trang/đóng khung trong lúc chờ thì không phát
+      // nữa - dọn dẹp lúc unmount đã chạy, tiếng phát lúc này không tắt được
+      if (!mountedRef.current) return;
       setResults((prev) => ({ ...prev, [speaker]: res }));
       const url = URL.createObjectURL(res.audio);
       const audio = new Audio(url);
@@ -997,6 +1004,8 @@ export default function TranslateVideoDetailPage() {
   const [sttProviders, setSttProviders] = useState<SttCapability[] | null>(null);
 
   const pending = useRef<Patch>({});
+  /** PATCH đang bay - flush sau phải chờ nó, kẻo bước kế tiếp chạy trước khi lưu xong */
+  const inflight = useRef<Promise<string | null> | null>(null);
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Upload video nguồn
@@ -1114,20 +1123,41 @@ export default function TranslateVideoDetailPage() {
 
   // ---- Lưu thay đổi: gộp lại rồi PATCH một lần ----
 
-  const flush = useCallback(async () => {
+  /**
+   * Gửi thay đổi đang chờ. Trả về thông báo lỗi (null = đã lưu / không có gì).
+   * Lưu hỏng thì TRẢ patch về hàng chờ (thay đổi gõ sau thắng) và người gọi
+   * phải dừng - dịch/render tiếp là làm trên bản cũ ở server.
+   */
+  const flush = useCallback(async (): Promise<string | null> => {
     if (flushTimer.current) {
       clearTimeout(flushTimer.current);
       flushTimer.current = null;
     }
-    if (Object.keys(pending.current).length === 0) return;
+    if (inflight.current) {
+      const prevErr = await inflight.current;
+      if (Object.keys(pending.current).length === 0) return prevErr;
+    }
+    if (Object.keys(pending.current).length === 0) return null;
     const patch = pending.current;
     pending.current = {};
+    const run = (async (): Promise<string | null> => {
+      try {
+        const s = await updateTranslateVideo(sessionId, patch);
+        setSession(s);
+        setSaveError(null);
+        return null;
+      } catch (e) {
+        pending.current = { ...patch, ...pending.current };
+        const msg = e instanceof Error ? e.message : String(e);
+        setSaveError(msg);
+        return msg;
+      }
+    })();
+    inflight.current = run;
     try {
-      const s = await updateTranslateVideo(sessionId, patch);
-      setSession(s);
-      setSaveError(null);
-    } catch (e) {
-      setSaveError(e instanceof Error ? e.message : String(e));
+      return await run;
+    } finally {
+      if (inflight.current === run) inflight.current = null;
     }
   }, [sessionId]);
 
@@ -1278,7 +1308,11 @@ export default function TranslateVideoDetailPage() {
     setActionError(null);
     try {
       // Gửi nốt sửa đổi đang chờ trước - server phải làm việc trên bản mới nhất
-      await flush();
+      const saveErr = await flush();
+      if (saveErr) {
+        setActionError(saveErr);
+        return;
+      }
       if (step === "translate") {
         adopt(await translateTranslateVideo(sessionId, { model: translateModel }));
       } else {

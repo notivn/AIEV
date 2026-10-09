@@ -252,6 +252,8 @@ export function VoicePicker({
   // Nghe thử: một audio element dùng chung - mỗi lúc chỉ một giọng được phát
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const urlRef = useRef<string | null>(null);
+  /** false sau khi unmount - nghe thử về muộn thì không phát nữa */
+  const mountedRef = useRef(true);
   const [playing, setPlaying] = useState<string | null>(null);
   const [loadingVoice, setLoadingVoice] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -340,7 +342,9 @@ export function VoicePicker({
 
   // Rời trang giữa lúc đang phát → tắt tiếng, không để audio chạy mồ côi
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
       audioRef.current?.pause();
       audioRef.current = null;
       if (urlRef.current) URL.revokeObjectURL(urlRef.current);
@@ -407,6 +411,9 @@ export function VoicePicker({
             }
           : { voice: name, engine, speed: value.speed, uiLang: lang }
       );
+      // Nghe thử VieNeu mất vài giây: đóng hộp/rời trang trong lúc chờ thì dọn
+      // dẹp ở trên đã chạy rồi - phát lúc này là tiếng mồ côi không tắt được
+      if (!mountedRef.current) return;
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
       audio.onended = () => stop();
