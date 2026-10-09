@@ -22,6 +22,7 @@ engines/remotion/
     ├── posterManifest.ts      ← load + validate poster props (zod)
     ├── thumbnailManifest.ts   ← load + validate thumbnail props (zod)
     ├── brandFonts.ts          ← load brand fonts via staticFile (offline)
+    ├── media.tsx              ← media URL resolver (staticFile by default; the dashboard preview swaps it)
     ├── index.ts               ← entry point registering Root
     └── components/
         ├── SceneClip.tsx      ← <OffthreadVideo>/<Img> for one scene/footage clip
@@ -117,6 +118,8 @@ When a transition has an overlap, subtract that overlap while accumulating - for
    (text-to-video, image-only explainers), where nothing has a natural duration to infer from.
 
 8. **Asset paths**: Remotion code only loads through `staticFile()` - the backend stages assets into `engines/remotion/public/staging/<project>/` (hardlink) and writes the `staging/...` path into `props.resolved.json`; Remotion never reads an absolute path. This runs on Windows - always use `path.join` on the backend, never string concatenation.
+
+   Inside the `Assemble` tree, get that `staticFile` through **`useMediaSrc()`** (`src/media.tsx`), never by calling `staticFile()` directly. The dashboard editor runs the same `Assemble` in `@remotion/player`, where there is no Remotion `public/`: it wraps the tree in `MediaResolverProvider` and maps project-relative paths to `/media/video-projects/<id>/...` and `fonts/...` to `/media/remotion-fonts/...`. A direct `staticFile()` (or one evaluated at module scope, like the old `vietnameseFontFaceCss` constant) renders fine through the CLI but 404s in the preview. The default resolver IS `staticFile`, so CLI renders produce the same frames as before. Poster/Thumbnail/brandFonts only render through the CLI and keep `staticFile`.
 
 ## Draft vs Final
 

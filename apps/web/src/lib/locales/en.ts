@@ -2536,4 +2536,10 @@ export const en: Record<string, string> = {
   "autocut.stage.cut": "Cut & create projects",
   "autocut.stage.done": "Done",
   "autocut.stage-aria": "Step {stage}/5: {label}",
+
+  // ===== Editor - preview player (PreviewPlayer) =====
+  "editor.player.invalid": "Can't build the preview - the timeline has errors:",
+  "editor.player.issue-root": "(root)",
+  "editor.player.scene-no-duration": "Scene \"{id}\" has no length: it needs durationInFrames (a footage scene can use from/to instead).",
+  "editor.player.crashed": "The preview player hit an error while drawing a frame.",
 };
