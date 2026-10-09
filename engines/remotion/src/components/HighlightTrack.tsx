@@ -7,6 +7,7 @@ import {
   useVideoConfig,
 } from "remotion";
 import type { HighlightCue } from "../manifest";
+import { useMediaSrc } from "../media";
 import { fadeInOut } from "./fade";
 import { useVietnameseFont, VIETNAMESE_FONT_FAMILY, vietnameseFontFaceCss } from "./vietnameseFont";
 
@@ -190,11 +191,12 @@ export const HighlightTrack: React.FC<{
   raised?: boolean;
 }> = ({ overlays, raised = false }) => {
   useVietnameseFont();
+  const mediaSrc = useMediaSrc();
 
   return (
     <>
       {/* @font-face phải nằm trong DOM render, không import CSS ngoài */}
-      <style>{vietnameseFontFaceCss}</style>
+      <style>{vietnameseFontFaceCss(mediaSrc)}</style>
       {overlays.map((cue, index) => (
         <Sequence
           key={`hl-${cue.from}-${index}`}

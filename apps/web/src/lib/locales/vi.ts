@@ -2529,4 +2529,10 @@ export const vi: Record<string, string> = {
   "autocut.stage.cut": "Cắt & tạo project",
   "autocut.stage.done": "Xong",
   "autocut.stage-aria": "Bước {stage}/5: {label}",
+
+  // ===== Trình chỉnh sửa - trình phát xem trước (PreviewPlayer) =====
+  "editor.player.invalid": "Không dựng được bản xem trước - timeline có lỗi:",
+  "editor.player.issue-root": "(toàn bộ)",
+  "editor.player.scene-no-duration": "Scene \"{id}\" chưa có độ dài: cần durationInFrames (scene footage có thể thay bằng from/to).",
+  "editor.player.crashed": "Trình phát xem trước gặp lỗi khi dựng khung hình.",
 };

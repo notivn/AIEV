@@ -191,6 +191,12 @@ export const paths = {
   /** Nơi stage asset bằng hardlink cho Remotion staticFile() */
   stagingDir: path.join(repoRoot, "engines", "remotion", "public", "staging"),
   /**
+   * Font overlay của tầng lắp ráp (Inter subset latin + vietnamese). Render qua
+   * CLI đọc bằng staticFile("fonts/..."); trình phát xem trước trong dashboard
+   * đọc cùng các file này qua /media/remotion-fonts/ (routes/media.ts).
+   */
+  remotionFontsDir: path.join(repoRoot, "engines", "remotion", "public", "fonts"),
+  /**
    * Dữ liệu tạm lúc chạy - TẤT CẢ nằm trong repo, KHÔNG rải ra ổ hệ thống.
    *
    * Đo được trên máy Windows này (repo ở ổ F:, ổ C: chỉ còn 17,7GB trống):

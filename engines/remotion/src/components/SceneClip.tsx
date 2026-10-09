@@ -1,6 +1,7 @@
 import React from "react";
-import { AbsoluteFill, Img, OffthreadVideo, staticFile, useCurrentFrame } from "remotion";
+import { AbsoluteFill, Img, OffthreadVideo, useCurrentFrame } from "remotion";
 import type { Scene, Zoom } from "../manifest";
+import { useMediaSrc } from "../media";
 
 const videoStyle: React.CSSProperties = {
   width: "100%",
@@ -77,16 +78,19 @@ const ZoomWrapper: React.FC<{ zoom?: Zoom; children: React.ReactNode }> = ({
  * - chưa có media nào (vd mở Studio với defaultProps demo) → placeholder tối
  *   hiện id scene, để Studio mở được mà không cần file trong staging.
  *
- * Mọi đường dẫn là đường dẫn tương đối trong public/ (staging) → staticFile().
+ * Mọi đường dẫn là đường dẫn tương đối trong public/ (staging) → staticFile()
+ * (qua useMediaSrc - trình phát trong dashboard thay resolver, xem media.tsx).
  */
 export const SceneClip: React.FC<{
   scene: Scene;
   fps: number;
 }> = ({ scene, fps }) => {
+  const mediaSrc = useMediaSrc();
+
   if (scene.render) {
     return (
       <ZoomWrapper zoom={scene.zoom}>
-        <OffthreadVideo src={staticFile(scene.render)} style={videoStyle} />
+        <OffthreadVideo src={mediaSrc(scene.render)} style={videoStyle} />
       </ZoomWrapper>
     );
   }
@@ -97,7 +101,7 @@ export const SceneClip: React.FC<{
     return (
       <ZoomWrapper zoom={scene.zoom}>
         <OffthreadVideo
-          src={staticFile(scene.srcVideo)}
+          src={mediaSrc(scene.srcVideo)}
           startFrom={startFrom}
           endAt={endAt}
           muted={scene.muted ?? false}
@@ -110,7 +114,7 @@ export const SceneClip: React.FC<{
   if (scene.srcImage) {
     return (
       <ZoomWrapper zoom={scene.zoom}>
-        <Img src={staticFile(scene.srcImage)} style={videoStyle} />
+        <Img src={mediaSrc(scene.srcImage)} style={videoStyle} />
       </ZoomWrapper>
     );
   }

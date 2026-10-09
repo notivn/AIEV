@@ -5,7 +5,7 @@ import { paths } from "../config.js";
 /**
  * GET /media/<relPath> - phát file tĩnh (video/audio seek được nhờ Range).
  * Chỉ phục vụ dưới whitelist: video-projects/, image-projects/, translate-video/,
- * assets/, outputs/, imports/.
+ * assets/, outputs/, imports/, remotion-fonts/.
  * express.static (serve-static) tự chặn `..`/path traversal và hỗ trợ Range.
  */
 const router = Router();
@@ -20,6 +20,11 @@ const whitelist: Record<string, string> = {
   assets: paths.assetsDir,
   outputs: paths.outputsDir,
   imports: paths.importsDir,
+  // Font overlay (Inter VN) của composition Assemble - trình phát xem trước
+  // trong trình chỉnh sửa nạp @font-face từ đây thay cho staticFile("fonts/...")
+  // (engines/remotion/src/media.tsx). Thiếu thì phụ đề/highlight rơi về font
+  // dự phòng và mất dấu tiếng Việt ngay trong bản xem trước.
+  "remotion-fonts": paths.remotionFontsDir,
 };
 
 /** Đuôi file KHÔNG bao giờ được trình duyệt render như tài liệu same-origin */

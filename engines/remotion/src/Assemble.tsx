@@ -1,5 +1,5 @@
 import React from "react";
-import { AbsoluteFill, Audio, Img, Sequence, staticFile, useVideoConfig } from "remotion";
+import { AbsoluteFill, Audio, Img, Sequence, useVideoConfig } from "remotion";
 import {
   resolveSceneDurationInFrames,
   type Manifest,
@@ -11,6 +11,7 @@ import { SceneClip } from "./components/SceneClip";
 import { SfxTrack } from "./components/SfxTrack";
 import { SubtitleTrack } from "./components/SubtitleTrack";
 import { Transition } from "./components/Transition";
+import { useMediaSrc } from "./media";
 
 /**
  * Composition "Assemble" duy nhất — data-driven hoàn toàn từ manifest
@@ -24,6 +25,7 @@ import { Transition } from "./components/Transition";
 export const Assemble: React.FC<Manifest> = (manifest) => {
   const { scenes, audio, fps, captions, overlays, watermark, subtitles, subtitleStyle } =
     manifest;
+  const mediaSrc = useMediaSrc();
 
   let from = 0;
   const sequences = scenes.map((scene, index) => {
@@ -76,7 +78,7 @@ export const Assemble: React.FC<Manifest> = (manifest) => {
       {captions.length > 0 ? <CaptionTrack captions={captions} /> : null}
 
       {/* Voice: xương sống sync — một track chạy suốt từ frame 0 */}
-      {audio.voice ? <Audio src={staticFile(audio.voice)} /> : null}
+      {audio.voice ? <Audio src={mediaSrc(audio.voice)} /> : null}
 
       {/* Sound effects theo atFrame */}
       <SfxTrack sfx={audio.sfx} />
@@ -104,6 +106,7 @@ const WatermarkMark: React.FC<{ watermark: NonNullable<Manifest["watermark"]> }>
   watermark,
 }) => {
   const { width, height } = useVideoConfig();
+  const mediaSrc = useMediaSrc();
   const margin = Math.round((watermark.marginPercent / 100) * width);
   const logoHeight = Math.round((watermark.heightPercent / 100) * height);
   const vertical = watermark.position.startsWith("top")
@@ -115,7 +118,7 @@ const WatermarkMark: React.FC<{ watermark: NonNullable<Manifest["watermark"]> }>
 
   return (
     <Img
-      src={staticFile(watermark.file)}
+      src={mediaSrc(watermark.file)}
       style={{
         position: "absolute",
         ...vertical,

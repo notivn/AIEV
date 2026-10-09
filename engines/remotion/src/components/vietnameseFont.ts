@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { cancelRender, continueRender, delayRender, staticFile } from "remotion";
+import {
+  cancelRender,
+  continueRender,
+  delayRender,
+  getRemotionEnvironment,
+} from "remotion";
+import type { MediaResolver } from "../media";
 
 /**
  * Font tiếng Việt nạp OFFLINE từ public/fonts (Inter, subset latin +
@@ -20,23 +26,31 @@ export const VIETNAMESE_FONT_FAMILY = "CaptionInter";
 
 const WEIGHTS = [600, 700, 800] as const;
 
-export const vietnameseFontFaceCss = WEIGHTS.flatMap((weight) =>
-  (
-    [
-      ["latin", LATIN_RANGE],
-      ["vietnamese", VIETNAMESE_RANGE],
-    ] as const
-  ).map(
-    ([subset, range]) => `@font-face{
+/**
+ * Khối @font-face cho các overlay. Là HÀM của resolver (gọi lúc render), không
+ * phải hằng số tính ở module scope: `staticFile()` chạy ở module scope thì
+ * trong trình phát của dashboard nó trỏ vào public/ của Remotion - không tồn
+ * tại ở đó, font 404 rồi cancelRender làm sập cả trang. Resolver mặc định là
+ * staticFile nên chuỗi CSS khi render qua CLI giữ nguyên từng ký tự.
+ */
+export const vietnameseFontFaceCss = (resolve: MediaResolver): string =>
+  WEIGHTS.flatMap((weight) =>
+    (
+      [
+        ["latin", LATIN_RANGE],
+        ["vietnamese", VIETNAMESE_RANGE],
+      ] as const
+    ).map(
+      ([subset, range]) => `@font-face{
   font-family:'${VIETNAMESE_FONT_FAMILY}';
   font-style:normal;
   font-weight:${weight};
   font-display:block;
-  src:url('${staticFile(`fonts/inter-${subset}-${weight}.woff2`)}') format('woff2');
+  src:url('${resolve(`fonts/inter-${subset}-${weight}.woff2`)}') format('woff2');
   unicode-range:${range};
 }`,
-  ),
-).join("\n");
+    ),
+  ).join("\n");
 
 /**
  * Chặn render tới khi font thật sẵn sàng — nếu không, frame đầu vẽ bằng font
@@ -44,6 +58,10 @@ export const vietnameseFontFaceCss = WEIGHTS.flatMap((weight) =>
  *
  * An toàn khi gọi từ nhiều component trong cùng một render: mỗi handle
  * delayRender được continue riêng.
+ *
+ * Lỗi nạp font: khi RENDER thì cancelRender (thà chết còn hơn xuất video mất
+ * dấu); trong trình phát xem trước (@remotion/player) chỉ cảnh báo rồi cho
+ * chạy tiếp bằng font dự phòng - một file font lỗi không được làm sập trang.
  */
 export const useVietnameseFont = (): void => {
   const [handle] = useState(() => delayRender("Nạp font overlay (Inter VN)"));
@@ -59,8 +77,14 @@ export const useVietnameseFont = (): void => {
     )
       .then(() => document.fonts.ready)
       .then(() => continueRender(handle))
-      .catch((err: unknown) =>
-        cancelRender(new Error(`Không nạp được font overlay: ${String(err)}`)),
-      );
+      .catch((err: unknown) => {
+        const message = `Không nạp được font overlay: ${String(err)}`;
+        if (getRemotionEnvironment().isPlayer) {
+          console.warn(message);
+          continueRender(handle);
+          return;
+        }
+        cancelRender(new Error(message));
+      });
   }, [handle]);
 };

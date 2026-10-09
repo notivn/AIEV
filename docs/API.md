@@ -1270,7 +1270,7 @@ POST /api/assets  multipart: file + scope (+projectId) → FileInfo (tên file �
 GET  /media/<relPath>          — static có hỗ trợ Range (video/audio seek được).
 POST /api/reveal { relPath }   → 204 — mở đúng file trong Explorer/Finder trên máy chạy server.
 ```
-Chỉ phục vụ dưới các thư mục whitelist: `video-projects/`, `image-projects/`, `assets/`, `outputs/`, `imports/`. Chặn `..`.
+Chỉ phục vụ dưới các thư mục whitelist: `video-projects/`, `image-projects/`, `translate-video/`, `assets/`, `outputs/`, `imports/`, `remotion-fonts/` (= `engines/remotion/public/fonts`, font overlay cho trình phát xem trước Remotion trong trình chỉnh sửa). Chặn `..`.
 `relPath` tính từ repo root, vd `/media/outputs/demo-v1.mp4`. Reveal: file không tồn tại → 404, ngoài whitelist → 403.
 
 ## Chat (Claude Agent)

@@ -7,6 +7,7 @@ import {
   useVideoConfig,
 } from "remotion";
 import type { SubtitleCue, SubtitleStyle } from "../manifest";
+import { useMediaSrc, type MediaResolver } from "../media";
 import { fadeInOut } from "./fade";
 import {
   useVietnameseFont,
@@ -45,7 +46,13 @@ import {
  * vietnamese, nạp offline từ public/fonts): fallback font trong CSS là theo
  * TỪNG GLYPH, nên chữ Ề/Ợ mà font đứng trước thiếu vẫn được Inter vẽ đúng dấu.
  */
-export const SUBTITLE_FONTS: Record<string, { stack: string; faceCss: string }> = {
+type SubtitleFont = {
+  stack: string;
+  /** Hàm của resolver media (staticFile khi render, /media/... trong trình phát) */
+  faceCss: (resolve: MediaResolver) => string;
+};
+
+export const SUBTITLE_FONTS: Record<string, SubtitleFont> = {
   // Mặc định - đúng font của CaptionTrack/HighlightTrack
   vietnamese: {
     stack: `'${VIETNAMESE_FONT_FAMILY}', 'Segoe UI', sans-serif`,
@@ -70,7 +77,7 @@ export const SUBTITLE_FONTS: Record<string, { stack: string; faceCss: string }> 
 export const DEFAULT_SUBTITLE_FONT = "vietnamese";
 
 /** Id lạ (hoặc bỏ trống) rơi về font tiếng Việt, KHÔNG rơi về không có gì */
-export function resolveSubtitleFont(id?: string): { stack: string; faceCss: string } {
+export function resolveSubtitleFont(id?: string): SubtitleFont {
   const key = (id ?? "").trim().toLowerCase();
   return SUBTITLE_FONTS[key] ?? SUBTITLE_FONTS[DEFAULT_SUBTITLE_FONT];
 }
@@ -206,13 +213,14 @@ export const SubtitleTrack: React.FC<{
   raised?: boolean;
 }> = ({ subtitles, style, raised = false }) => {
   useVietnameseFont();
+  const mediaSrc = useMediaSrc();
 
   const font = resolveSubtitleFont(style?.fontFamily);
 
   return (
     <>
       {/* @font-face phải nằm trong DOM render, không import CSS ngoài */}
-      <style>{font.faceCss}</style>
+      <style>{font.faceCss(mediaSrc)}</style>
       {subtitles.map((cue, index) => (
         <Sequence
           key={`sub-${cue.from}-${index}`}
